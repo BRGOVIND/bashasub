@@ -1,6 +1,8 @@
 # BhashaSub
+https://bashasub.onrender.com
 
-An async FastAPI-based AI translation service built with Python.
+Built BhashaSub as a backend engineering project to learn production Python patterns. It's a FastAPI service that takes text input, calls the Gemini API to translate it into Indian languages, and returns the result through a browser UI. I focused on things like async communication, retry logic for rate-limited APIs, structured logging, and Pydantic validation — essentially the same patterns used in production AI pipelines.
+It works if someone pays for API keys 😶😶
 
 ## Features
 
