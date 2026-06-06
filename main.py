@@ -1,57 +1,44 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
-from models import (
-    TranslationRequest,
-    TranslationResponse
-)
-
+from models import TranslationRequest
 from services.translator import translate_text
 
-from logger import get_logger
-
-logger = get_logger("main")
-
 app = FastAPI(
-    title="BhashaSub",
-    description="AI Translation Service",
-    version="1.0.0"
+    title="BhashaSub"
+)
+
+app.mount(
+    "/static",
+    StaticFiles(directory="static"),
+    name="static"
+)
+
+templates = Jinja2Templates(
+    directory="templates"
 )
 
 
-@app.get("/")
-async def root():
+@app.get("/", response_class=HTMLResponse)
+async def home(request: Request):
 
-    logger.info("Root endpoint called")
-
-    return {
-        "message": "BhashaSub API Running"
-    }
-
-
-@app.get("/health")
-async def health():
-
-    logger.info("Health check called")
-
-    return {
-        "status": "healthy"
-    }
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html"
+    )
 
 
-@app.post(
-    "/translate",
-    response_model=TranslationResponse
-)
+@app.post("/translate")
 async def translate(
     request: TranslationRequest
 ):
 
-    logger.info("Translation endpoint called")
-
-    translated_text = await translate_text(
+    translated = await translate_text(
         request.text
     )
 
-    return TranslationResponse(
-        translation=translated_text
-    )
+    return {
+        "translation": translated
+    }

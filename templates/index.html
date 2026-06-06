@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>BhashaSub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="page">
+
+  <div class="eyebrow">v1.0 · AI Translation Service</div>
+  <h1>Bhasha<em>Sub</em></h1>
+  <p class="tagline">Text → Indian Language Translation</p>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="dot active"></div>
+      <span class="card-label">Source Text</span>
+    </div>
+    <textarea id="inputText" placeholder="Paste your text here to translate..."></textarea>
+    <div class="btn-row">
+      <span class="char-count" id="charCount">0 characters</span>
+      <button id="translateBtn" onclick="translateText()">Translate →</button>
+    </div>
+  </div>
+
+  <div class="output-card">
+    <div class="output-header">
+      <div class="dot" id="outputDot"></div>
+      <span class="output-label">Translation Output</span>
+    </div>
+    <div class="output-body" id="result">
+      <span class="placeholder-text">Output will appear here...</span>
+    </div>
+  </div>
+
+  <div class="footer">
+    <span class="footer-left">powered by Gemini · FastAPI</span>
+    <div class="lang-pills">
+      <span class="pill">HI</span>
+      <span class="pill">ML</span>
+      <span class="pill">TA</span>
+      <span class="pill">TE</span>
+      <span class="pill">BN</span>
+    </div>
+  </div>
+
+</div>
+
+<script src="/static/script.js"></script>
+</body>
+</html>

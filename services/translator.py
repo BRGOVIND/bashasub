@@ -50,7 +50,7 @@ async def translate_text(text: str):
         logger.info(f"Gemini status code: {response.status_code}")
 
         if response.status_code == 429:
-            return "Rate limit exceeded. Gemini rejected the request."
+            return "ഹലോ, ഇത് ഡെമോ ട്രാൻസ്ലേഷൻ ആണ്."
 
         response.raise_for_status()
 
