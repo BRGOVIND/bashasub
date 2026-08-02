@@ -1,12 +1,14 @@
 # BhashaSub
 https://bashasub.onrender.com
 
-Built BhashaSub as a backend engineering project to learn production Python patterns. It's a FastAPI service that takes text input, calls the Gemini API to translate it into Indian languages, and returns the result through a browser UI. I focused on things like async communication, retry logic for rate-limited APIs, structured logging, and Pydantic validation — essentially the same patterns used in production AI pipelines.
-It works if someone pays for API keys 😶😶
+Built BhashaSub as an educational backend project to help students understand how modern AI APIs are integrated into real-world applications. It demonstrates the complete flow of a FastAPI service—from accepting user input and validating requests to communicating with the Gemini API, handling rate limits with retry logic, and returning translated text through a simple web interface. The goal was to make concepts like asynchronous API calls, environment-based configuration, structured logging, and production-ready backend patterns easier to learn through a working example.
+
+It works if someone provides a valid Gemini API key 😶😶
 
 ## Features
 
 - FastAPI REST API
+- Integration with the Gemini API
 - Async HTTP requests using HTTPX
 - Environment-based configuration
 - Structured logging
@@ -26,10 +28,7 @@ It works if someone pays for API keys 😶😶
 
 ## Run Locally
 
+```bash
 pip install -r requirements.txt
 
 uvicorn main:app --reload
-
-Open:
-
-http://127.0.0.1:8000/docs
