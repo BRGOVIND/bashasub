@@ -16,8 +16,6 @@
   --accent-hover:    #32503f;
   --accent-soft:     #eaefe9;
 
-  --success:         #3f6350;
-  --warning:         #8a6420;
   --error:           #9b4a37;   /* restrained terracotta */
   --error-soft:      #f7ece8;
 
@@ -39,7 +37,6 @@
   /* Radius / motion ------------------------------------------------------ */
   --r-sm: 5px;  --r-md: 9px;  --r-lg: 13px;
   --t-fast: 110ms ease;
-  --t-normal: 200ms ease;
 }
 
 *, *::before, *::after { box-sizing: border-box; }

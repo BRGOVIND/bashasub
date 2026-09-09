@@ -8,7 +8,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from logger import get_logger
+from models import ErrorResponse
 from models import TranslationRequest
+from models import TranslationResponse
 from services.translator import TranslationClientError
 from services.translator import TranslationUnavailableError
 from services.translator import redact
@@ -129,7 +131,15 @@ async def home(request: Request):
     )
 
 
-@app.post("/translate")
+@app.post(
+    "/translate",
+    response_model=TranslationResponse,
+    responses={
+        400: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+        503: {"model": ErrorResponse},
+    },
+)
 async def translate(
     payload: TranslationRequest,
     request: Request,

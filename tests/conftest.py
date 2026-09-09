@@ -13,15 +13,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest  # noqa: E402
 
-import httpx  # noqa: E402
-
-import services.translator as translator  # noqa: E402
-from main import app  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
+# Nothing from the web application is imported at module level. The core is
+# specified to work without FastAPI, httpx or pydantic, so `pytest tests/core`
+# has to run in an install that has none of them. Importing the app here would
+# silently break that guarantee at collection time.
 
 
 @pytest.fixture
 def client():
+    from fastapi.testclient import TestClient
+
+    from main import app
+
     # raise_server_exceptions=False so the registered 500 handler is exercised
     # the same way it would be in production.
     return TestClient(app, raise_server_exceptions=False)
@@ -34,6 +37,7 @@ def upstream(monkeypatch):
     Records what was actually sent so tests can assert on the real URL and
     headers, and returns a scripted response instead of calling Google.
     """
+    import httpx
 
     class Upstream:
         def __init__(self):
@@ -74,6 +78,7 @@ def upstream(monkeypatch):
 @pytest.fixture
 def no_retry_sleep(monkeypatch):
     """Collapse tenacity's exponential backoff so retry paths run instantly."""
+    import services.translator as translator
 
     async def instant(_seconds):
         return None
