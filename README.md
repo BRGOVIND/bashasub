@@ -27,7 +27,7 @@ to say which unit a given threshold assumes.
 | SRT parser and serializer, with source line spans | ✅ |
 | Property-based round-trip and determinism tests | ✅ |
 | Translation demo endpoint (`POST /translate`, Gemini) | ✅ |
-| Script-aware measurement | ⏳ not yet |
+| Script-aware measurement (grapheme default) | ✅ |
 | Rule engine, specifications, findings | ⏳ not yet |
 | CLI, SARIF output, fixes | ⏳ not yet |
 

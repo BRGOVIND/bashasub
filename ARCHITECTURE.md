@@ -22,7 +22,7 @@ src/bhashasub/
 │   │   ├── detect.py     encoding and format detection             ✅
 │   │   ├── srt.py        parse / serialize                         ✅
 │   │   └── vtt.py                                                  ⏳
-│   ├── measure/          codepoint | grapheme | akshara            ⏳
+│   ├── measure/          codepoint | grapheme | akshara            ✅
 │   ├── spec.py           declarative specification loader          ⏳
 │   ├── rules/            one rule per file, pure functions         ⏳
 │   ├── finding.py        Finding, Severity, fingerprints           ⏳
