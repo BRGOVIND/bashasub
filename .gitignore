@@ -4,3 +4,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .vscode/
+
+# packaging / editable install artifacts
+*.egg-info/
+build/
+dist/
+.hypothesis/

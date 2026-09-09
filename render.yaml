@@ -1,0 +1,24 @@
+# Render Blueprint. Puts deployment configuration in the repository instead of
+# only in the dashboard, so builds are reproducible and reviewable.
+#
+# NOTE: this file is only read if the Render service is created from a
+# Blueprint. An existing manually-created service keeps using its dashboard
+# settings; the values below document what those settings should be.
+services:
+  - type: web
+    name: bashasub
+    runtime: python
+    plan: free
+    branch: main
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      # sync:false means Render prompts for the value and never stores it in
+      # this repository. The key is read by config.Settings and sent only as
+      # the x-goog-api-key request header.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: PYTHON_VERSION
+        value: "3.12.10"
