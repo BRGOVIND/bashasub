@@ -1,56 +1,99 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>BhashaSub</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BhashaSub — subtitle quality control</title>
+  <meta name="description" content="BhashaSub checks subtitle files against delivery specifications and explains why they pass or fail.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
 </head>
 <body>
-
 <div class="page">
 
-  <div class="eyebrow">v1.0 · AI Translation Service</div>
-  <h1>Bhasha<em>Sub</em></h1>
-  <p class="tagline">Text → Indian Language Translation</p>
+  <header class="site-header">
+    <span class="wordmark">Bhasha<span>Sub</span></span>
+    <span class="header-note">Subtitle quality control</span>
+  </header>
 
-  <div class="card">
-    <div class="card-header">
-      <div class="dot active"></div>
-      <span class="card-label">Source Text</span>
-    </div>
-    <textarea id="inputText" placeholder="Paste your text here to translate..."></textarea>
-    <div class="btn-row">
-      <span class="char-count" id="charCount">0 characters</span>
-      <button id="translateBtn" onclick="translateText()">Translate →</button>
-    </div>
-  </div>
+  <main>
+    <section class="hero">
+      <h1>Subtitle quality control, without the guesswork.</h1>
+      <p class="lede">
+        Reading speed is one of the most common reasons subtitle files get rejected.
+        BhashaSub reads a subtitle file properly &mdash; cue by cue, in the script it is
+        actually written in &mdash; and explains what would fail before anyone else sees it.
+      </p>
+      <p class="status-note">
+        The conformance checker is still being built. What runs here today is the
+        translation tool below; the parsing and measurement core it will sit on is
+        already in the repository.
+      </p>
+    </section>
 
-  <div class="output-card">
-    <div class="output-header">
-      <div class="dot" id="outputDot"></div>
-      <span class="output-label">Translation Output</span>
-    </div>
-    <div class="output-body" id="result">
-      <span class="placeholder-text">Output will appear here...</span>
-    </div>
-  </div>
+    <section aria-labelledby="translate-heading">
+      <h2 id="translate-heading">Translate text into Malayalam</h2>
+      <p class="section-lede">
+        Paste text and BhashaSub will translate it. Malayalam is the only target
+        language wired up at the moment.
+      </p>
 
-  <div class="footer">
-    <span class="footer-left">powered by Gemini · FastAPI</span>
-    <div class="lang-pills">
-      <span class="pill">HI</span>
-      <span class="pill">ML</span>
-      <span class="pill">TA</span>
-      <span class="pill">TE</span>
-      <span class="pill">BN</span>
-    </div>
-  </div>
+      <div class="panel">
+        <label class="panel-label" for="inputText">Source text</label>
+        <textarea id="inputText" placeholder="Paste the text you want translated."
+                  spellcheck="true"></textarea>
+        <div class="panel-footer">
+          <span class="char-count" id="charCount">0 characters</span>
+          <button class="btn" id="translateBtn" type="button">Translate</button>
+        </div>
+      </div>
+
+      <div class="panel result" id="resultPanel" data-state="idle">
+        <h3 class="panel-label" id="resultLabel">Translation</h3>
+        <p class="result-body" id="result" data-empty="true"
+           aria-live="polite" aria-atomic="true">Nothing translated yet.</p>
+      </div>
+    </section>
+
+    <section aria-labelledby="core-heading">
+      <h2 id="core-heading">What the core does today</h2>
+      <p class="section-lede">
+        These are implemented and covered by tests, not planned.
+      </p>
+      <ul class="facts">
+        <li>
+          <h3>Reads real files</h3>
+          <p>
+            Detects UTF-8, byte-order marks, UTF-16 and legacy codepages, and says so
+            when a file is ambiguous rather than quietly mangling it.
+          </p>
+        </li>
+        <li>
+          <h3>Parses cue by cue</h3>
+          <p>
+            An SRT file becomes timed cues with source line numbers, so a problem can be
+            pointed at the exact line that caused it.
+          </p>
+        </li>
+        <li>
+          <h3>Keeps time honestly</h3>
+          <p>
+            Timing is whole milliseconds, and frame-based rules convert against a real
+            frame rate &mdash; two frames is 80&nbsp;ms at 25&nbsp;fps but 84&nbsp;ms at 23.976.
+          </p>
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <span>Open source, Apache&#8209;2.0.</span>
+    <a href="https://github.com/BRGOVIND/bashasub">github.com/BRGOVIND/bashasub</a>
+  </footer>
 
 </div>
-
-<script src="/static/script.js"></script>
+<script src="/static/script.js?v={{ asset_version }}"></script>
 </body>
 </html>
