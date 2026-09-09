@@ -1,0 +1,1398 @@
+{
+  "total_cues_measured": 17577,
+  "total_cues_analysed": 10510,
+  "excluded_off_script": {
+    "bn": 3500,
+    "hi": 2,
+    "kn": 5,
+    "ml": 38,
+    "mr": 11,
+    "ta": 3504,
+    "te": 7
+  },
+  "expected_script": {
+    "ml": "MALAYALAM",
+    "ta": "TAMIL",
+    "hi": "DEVANAGARI",
+    "bn": "BENGALI",
+    "te": "TELUGU",
+    "kn": "KANNADA",
+    "mr": "DEVANAGARI"
+  },
+  "languages": {
+    "bn": {
+      "name": "Bengali",
+      "cues": 351,
+      "files": 12,
+      "counts": {
+        "codepoints": {
+          "n": 351,
+          "mean": 30.262,
+          "median": 26,
+          "sd": 20.826,
+          "p90": 50,
+          "p99": 113,
+          "max": 151
+        },
+        "graphemes": {
+          "n": 351,
+          "mean": 19.433,
+          "median": 16,
+          "sd": 14.152,
+          "p90": 33,
+          "p99": 74,
+          "max": 114
+        },
+        "aksharas": {
+          "n": 351,
+          "mean": 19.422,
+          "median": 16,
+          "sd": 14.149,
+          "p90": 33,
+          "p99": 74,
+          "max": 114
+        }
+      },
+      "ratios": {
+        "codepoint_per_grapheme": {
+          "n": 351,
+          "mean": 1.595,
+          "median": 1.562,
+          "sd": 0.21,
+          "p90": 1.857,
+          "p99": 2.125,
+          "max": 3.0
+        },
+        "grapheme_per_akshara": {
+          "n": 351,
+          "mean": 1.0,
+          "median": 1.0,
+          "sd": 0.005,
+          "p90": 1.0,
+          "p99": 1.0,
+          "max": 1.05
+        },
+        "codepoint_per_akshara": {
+          "n": 351,
+          "mean": 1.596,
+          "median": 1.562,
+          "sd": 0.21,
+          "p90": 1.857,
+          "p99": 2.125,
+          "max": 3.0
+        }
+      },
+      "cps": {
+        "codepoint": {
+          "n": 351,
+          "mean": 9.408,
+          "median": 8.108,
+          "sd": 6.426,
+          "p90": 16.667,
+          "p99": 25.773,
+          "max": 68.388
+        },
+        "grapheme": {
+          "n": 351,
+          "mean": 6.023,
+          "median": 5.126,
+          "sd": 4.507,
+          "p90": 11.118,
+          "p99": 16.5,
+          "max": 51.63
+        },
+        "akshara": {
+          "n": 351,
+          "mean": 6.019,
+          "median": 5.126,
+          "sd": 4.503,
+          "p90": 11.118,
+          "p99": 16.5,
+          "max": 51.63
+        }
+      },
+      "correlation_cp_vs_grapheme": 0.9872,
+      "correlation_grapheme_vs_akshara": 1.0
+    },
+    "hi": {
+      "name": "Hindi",
+      "cues": 353,
+      "files": 14,
+      "counts": {
+        "codepoints": {
+          "n": 353,
+          "mean": 42.79,
+          "median": 37,
+          "sd": 25.577,
+          "p90": 81,
+          "p99": 110,
+          "max": 126
+        },
+        "graphemes": {
+          "n": 353,
+          "mean": 28.997,
+          "median": 25,
+          "sd": 17.712,
+          "p90": 55,
+          "p99": 73,
+          "max": 85
+        },
+        "aksharas": {
+          "n": 353,
+          "mean": 28.997,
+          "median": 25,
+          "sd": 17.712,
+          "p90": 55,
+          "p99": 73,
+          "max": 85
+        }
+      },
+      "ratios": {
+        "codepoint_per_grapheme": {
+          "n": 353,
+          "mean": 1.504,
+          "median": 1.469,
+          "sd": 0.186,
+          "p90": 1.688,
+          "p99": 1.917,
+          "max": 3.0
+        },
+        "grapheme_per_akshara": {
+          "n": 353,
+          "mean": 1.0,
+          "median": 1.0,
+          "sd": 0.0,
+          "p90": 1.0,
+          "p99": 1.0,
+          "max": 1.0
+        },
+        "codepoint_per_akshara": {
+          "n": 353,
+          "mean": 1.504,
+          "median": 1.469,
+          "sd": 0.186,
+          "p90": 1.688,
+          "p99": 1.917,
+          "max": 3.0
+        }
+      },
+      "cps": {
+        "codepoint": {
+          "n": 353,
+          "mean": 9.378,
+          "median": 7.692,
+          "sd": 5.413,
+          "p90": 17.114,
+          "p99": 23.774,
+          "max": 27.907
+        },
+        "grapheme": {
+          "n": 353,
+          "mean": 6.334,
+          "median": 5.108,
+          "sd": 3.702,
+          "p90": 11.635,
+          "p99": 15.603,
+          "max": 18.992
+        },
+        "akshara": {
+          "n": 353,
+          "mean": 6.334,
+          "median": 5.108,
+          "sd": 3.702,
+          "p90": 11.635,
+          "p99": 15.603,
+          "max": 18.992
+        }
+      },
+      "correlation_cp_vs_grapheme": 0.9888,
+      "correlation_grapheme_vs_akshara": 1.0
+    },
+    "kn": {
+      "name": "Kannada",
+      "cues": 758,
+      "files": 12,
+      "counts": {
+        "codepoints": {
+          "n": 758,
+          "mean": 55.247,
+          "median": 43.0,
+          "sd": 42.594,
+          "p90": 102,
+          "p99": 224,
+          "max": 263
+        },
+        "graphemes": {
+          "n": 758,
+          "mean": 35.943,
+          "median": 28.0,
+          "sd": 28.124,
+          "p90": 67,
+          "p99": 149,
+          "max": 174
+        },
+        "aksharas": {
+          "n": 758,
+          "mean": 31.054,
+          "median": 24.0,
+          "sd": 24.555,
+          "p90": 57,
+          "p99": 130,
+          "max": 147
+        }
+      },
+      "ratios": {
+        "codepoint_per_grapheme": {
+          "n": 758,
+          "mean": 1.539,
+          "median": 1.538,
+          "sd": 0.123,
+          "p90": 1.684,
+          "p99": 1.833,
+          "max": 1.9
+        },
+        "grapheme_per_akshara": {
+          "n": 758,
+          "mean": 1.165,
+          "median": 1.147,
+          "sd": 0.103,
+          "p90": 1.3,
+          "p99": 1.467,
+          "max": 1.667
+        },
+        "codepoint_per_akshara": {
+          "n": 758,
+          "mean": 1.798,
+          "median": 1.767,
+          "sd": 0.259,
+          "p90": 2.133,
+          "p99": 2.5,
+          "max": 3.167
+        }
+      },
+      "cps": {
+        "codepoint": {
+          "n": 758,
+          "mean": 16.734,
+          "median": 15.109,
+          "sd": 7.746,
+          "p90": 26.856,
+          "p99": 39.791,
+          "max": 47.577
+        },
+        "grapheme": {
+          "n": 758,
+          "mean": 10.854,
+          "median": 9.896,
+          "sd": 4.94,
+          "p90": 17.404,
+          "p99": 24.354,
+          "max": 29.944
+        },
+        "akshara": {
+          "n": 758,
+          "mean": 9.38,
+          "median": 8.613,
+          "sd": 4.356,
+          "p90": 15.306,
+          "p99": 21.0,
+          "max": 27.726
+        }
+      },
+      "correlation_cp_vs_grapheme": 0.997,
+      "correlation_grapheme_vs_akshara": 0.9966
+    },
+    "ml": {
+      "name": "Malayalam",
+      "cues": 1848,
+      "files": 10,
+      "counts": {
+        "codepoints": {
+          "n": 1848,
+          "mean": 50.208,
+          "median": 44.0,
+          "sd": 35.975,
+          "p90": 86,
+          "p99": 208,
+          "max": 271
+        },
+        "graphemes": {
+          "n": 1848,
+          "mean": 27.159,
+          "median": 24.0,
+          "sd": 19.479,
+          "p90": 46,
+          "p99": 122,
+          "max": 156
+        },
+        "aksharas": {
+          "n": 1848,
+          "mean": 25.668,
+          "median": 22.0,
+          "sd": 18.668,
+          "p90": 44,
+          "p99": 118,
+          "max": 153
+        }
+      },
+      "ratios": {
+        "codepoint_per_grapheme": {
+          "n": 1848,
+          "mean": 1.844,
+          "median": 1.842,
+          "sd": 0.251,
+          "p90": 2.143,
+          "p99": 2.5,
+          "max": 3.5
+        },
+        "grapheme_per_akshara": {
+          "n": 1848,
+          "mean": 1.064,
+          "median": 1.054,
+          "sd": 0.068,
+          "p90": 1.143,
+          "p99": 1.333,
+          "max": 1.5
+        },
+        "codepoint_per_akshara": {
+          "n": 1848,
+          "mean": 1.964,
+          "median": 1.955,
+          "sd": 0.312,
+          "p90": 2.318,
+          "p99": 2.75,
+          "max": 4.0
+        }
+      },
+      "cps": {
+        "codepoint": {
+          "n": 1848,
+          "mean": 16.381,
+          "median": 16.229,
+          "sd": 7.67,
+          "p90": 26.223,
+          "p99": 35.493,
+          "max": 62.5
+        },
+        "grapheme": {
+          "n": 1848,
+          "mean": 8.855,
+          "median": 8.612,
+          "sd": 4.052,
+          "p90": 14.195,
+          "p99": 19.185,
+          "max": 32.5
+        },
+        "akshara": {
+          "n": 1848,
+          "mean": 8.351,
+          "median": 8.113,
+          "sd": 3.842,
+          "p90": 13.468,
+          "p99": 17.904,
+          "max": 31.5
+        }
+      },
+      "correlation_cp_vs_grapheme": 0.989,
+      "correlation_grapheme_vs_akshara": 0.9982
+    },
+    "mr": {
+      "name": "Marathi",
+      "cues": 728,
+      "files": 12,
+      "counts": {
+        "codepoints": {
+          "n": 728,
+          "mean": 41.812,
+          "median": 34.0,
+          "sd": 33.596,
+          "p90": 76,
+          "p99": 189,
+          "max": 249
+        },
+        "graphemes": {
+          "n": 728,
+          "mean": 26.375,
+          "median": 22.0,
+          "sd": 20.475,
+          "p90": 49,
+          "p99": 111,
+          "max": 149
+        },
+        "aksharas": {
+          "n": 728,
+          "mean": 26.375,
+          "median": 22.0,
+          "sd": 20.475,
+          "p90": 49,
+          "p99": 111,
+          "max": 149
+        }
+      },
+      "ratios": {
+        "codepoint_per_grapheme": {
+          "n": 728,
+          "mean": 1.586,
+          "median": 1.571,
+          "sd": 0.221,
+          "p90": 1.812,
+          "p99": 2.167,
+          "max": 4.0
+        },
+        "grapheme_per_akshara": {
+          "n": 728,
+          "mean": 1.0,
+          "median": 1.0,
+          "sd": 0.0,
+          "p90": 1.0,
+          "p99": 1.0,
+          "max": 1.0
+        },
+        "codepoint_per_akshara": {
+          "n": 728,
+          "mean": 1.586,
+          "median": 1.571,
+          "sd": 0.221,
+          "p90": 1.812,
+          "p99": 2.167,
+          "max": 4.0
+        }
+      },
+      "cps": {
+        "codepoint": {
+          "n": 728,
+          "mean": 13.563,
+          "median": 12.881,
+          "sd": 6.923,
+          "p90": 22.222,
+          "p99": 34.654,
+          "max": 44.843
+        },
+        "grapheme": {
+          "n": 728,
+          "mean": 8.629,
+          "median": 8.318,
+          "sd": 4.373,
+          "p90": 14.118,
+          "p99": 22.599,
+          "max": 27.313
+        },
+        "akshara": {
+          "n": 728,
+          "mean": 8.629,
+          "median": 8.318,
+          "sd": 4.373,
+          "p90": 14.118,
+          "p99": 22.599,
+          "max": 27.313
+        }
+      },
+      "correlation_cp_vs_grapheme": 0.991,
+      "correlation_grapheme_vs_akshara": 1.0
+    },
+    "ta": {
+      "name": "Tamil",
+      "cues": 2772,
+      "files": 10,
+      "counts": {
+        "codepoints": {
+          "n": 2772,
+          "mean": 43.566,
+          "median": 41.0,
+          "sd": 23.57,
+          "p90": 73,
+          "p99": 115,
+          "max": 175
+        },
+        "graphemes": {
+          "n": 2772,
+          "mean": 28.016,
+          "median": 26.0,
+          "sd": 15.079,
+          "p90": 47,
+          "p99": 74,
+          "max": 109
+        },
+        "aksharas": {
+          "n": 2772,
+          "mean": 21.443,
+          "median": 20.0,
+          "sd": 11.462,
+          "p90": 36,
+          "p99": 58,
+          "max": 81
+        }
+      },
+      "ratios": {
+        "codepoint_per_grapheme": {
+          "n": 2772,
+          "mean": 1.554,
+          "median": 1.559,
+          "sd": 0.099,
+          "p90": 1.667,
+          "p99": 1.8,
+          "max": 2.0
+        },
+        "grapheme_per_akshara": {
+          "n": 2772,
+          "mean": 1.306,
+          "median": 1.304,
+          "sd": 0.117,
+          "p90": 1.448,
+          "p99": 1.625,
+          "max": 2.0
+        },
+        "codepoint_per_akshara": {
+          "n": 2772,
+          "mean": 2.034,
+          "median": 2.026,
+          "sd": 0.263,
+          "p90": 2.344,
+          "p99": 2.778,
+          "max": 3.5
+        }
+      },
+      "cps": {
+        "codepoint": {
+          "n": 2772,
+          "mean": 15.545,
+          "median": 14.879,
+          "sd": 6.554,
+          "p90": 24.01,
+          "p99": 34.914,
+          "max": 47.5
+        },
+        "grapheme": {
+          "n": 2772,
+          "mean": 9.996,
+          "median": 9.615,
+          "sd": 4.136,
+          "p90": 15.377,
+          "p99": 22.549,
+          "max": 27.66
+        },
+        "akshara": {
+          "n": 2772,
+          "mean": 7.657,
+          "median": 7.386,
+          "sd": 3.107,
+          "p90": 11.708,
+          "p99": 16.279,
+          "max": 20.213
+        }
+      },
+      "correlation_cp_vs_grapheme": 0.9954,
+      "correlation_grapheme_vs_akshara": 0.9901
+    },
+    "te": {
+      "name": "Telugu",
+      "cues": 3700,
+      "files": 12,
+      "counts": {
+        "codepoints": {
+          "n": 3700,
+          "mean": 35.166,
+          "median": 34.0,
+          "sd": 16.982,
+          "p90": 58,
+          "p99": 79,
+          "max": 113
+        },
+        "graphemes": {
+          "n": 3700,
+          "mean": 20.184,
+          "median": 19.0,
+          "sd": 9.757,
+          "p90": 33,
+          "p99": 46,
+          "max": 68
+        },
+        "aksharas": {
+          "n": 3700,
+          "mean": 19.783,
+          "median": 19.0,
+          "sd": 9.672,
+          "p90": 33,
+          "p99": 46,
+          "max": 67
+        }
+      },
+      "ratios": {
+        "codepoint_per_grapheme": {
+          "n": 3700,
+          "mean": 1.753,
+          "median": 1.741,
+          "sd": 0.212,
+          "p90": 2.0,
+          "p99": 2.333,
+          "max": 3.333
+        },
+        "grapheme_per_akshara": {
+          "n": 3700,
+          "mean": 1.025,
+          "median": 1.0,
+          "sd": 0.057,
+          "p90": 1.091,
+          "p99": 1.286,
+          "max": 1.5
+        },
+        "codepoint_per_akshara": {
+          "n": 3700,
+          "mean": 1.8,
+          "median": 1.769,
+          "sd": 0.272,
+          "p90": 2.091,
+          "p99": 2.667,
+          "max": 4.6
+        }
+      },
+      "cps": {
+        "codepoint": {
+          "n": 3700,
+          "mean": 13.501,
+          "median": 12.815,
+          "sd": 5.893,
+          "p90": 20.988,
+          "p99": 30.689,
+          "max": 48.462
+        },
+        "grapheme": {
+          "n": 3700,
+          "mean": 7.756,
+          "median": 7.345,
+          "sd": 3.367,
+          "p90": 12.097,
+          "p99": 17.629,
+          "max": 27.027
+        },
+        "akshara": {
+          "n": 3700,
+          "mean": 7.598,
+          "median": 7.143,
+          "sd": 3.345,
+          "p90": 11.972,
+          "p99": 17.4,
+          "max": 27.027
+        }
+      },
+      "correlation_cp_vs_grapheme": 0.9786,
+      "correlation_grapheme_vs_akshara": 0.9969
+    }
+  },
+  "questions": {
+    "q3_threshold_disagreement": {
+      "15": {
+        "bn": {
+          "fail_codepoint": 60,
+          "fail_grapheme": 7,
+          "fail_akshara": 7,
+          "fail_rate_codepoint": 17.09,
+          "fail_rate_grapheme": 1.99,
+          "fail_rate_akshara": 1.99,
+          "verdict_flips_cp_vs_grapheme": 53,
+          "flip_rate_cp_vs_grapheme": 15.1,
+          "verdict_flips_grapheme_vs_akshara": 0,
+          "flip_rate_grapheme_vs_akshara": 0.0
+        },
+        "hi": {
+          "fail_codepoint": 59,
+          "fail_grapheme": 8,
+          "fail_akshara": 8,
+          "fail_rate_codepoint": 16.71,
+          "fail_rate_grapheme": 2.27,
+          "fail_rate_akshara": 2.27,
+          "verdict_flips_cp_vs_grapheme": 51,
+          "flip_rate_cp_vs_grapheme": 14.45,
+          "verdict_flips_grapheme_vs_akshara": 0,
+          "flip_rate_grapheme_vs_akshara": 0.0
+        },
+        "kn": {
+          "fail_codepoint": 383,
+          "fail_grapheme": 157,
+          "fail_akshara": 85,
+          "fail_rate_codepoint": 50.53,
+          "fail_rate_grapheme": 20.71,
+          "fail_rate_akshara": 11.21,
+          "verdict_flips_cp_vs_grapheme": 226,
+          "flip_rate_cp_vs_grapheme": 29.82,
+          "verdict_flips_grapheme_vs_akshara": 72,
+          "flip_rate_grapheme_vs_akshara": 9.5
+        },
+        "ml": {
+          "fail_codepoint": 1026,
+          "fail_grapheme": 135,
+          "fail_akshara": 92,
+          "fail_rate_codepoint": 55.52,
+          "fail_rate_grapheme": 7.31,
+          "fail_rate_akshara": 4.98,
+          "verdict_flips_cp_vs_grapheme": 891,
+          "flip_rate_cp_vs_grapheme": 48.21,
+          "verdict_flips_grapheme_vs_akshara": 43,
+          "flip_rate_grapheme_vs_akshara": 2.33
+        },
+        "mr": {
+          "fail_codepoint": 276,
+          "fail_grapheme": 53,
+          "fail_akshara": 53,
+          "fail_rate_codepoint": 37.91,
+          "fail_rate_grapheme": 7.28,
+          "fail_rate_akshara": 7.28,
+          "verdict_flips_cp_vs_grapheme": 223,
+          "flip_rate_cp_vs_grapheme": 30.63,
+          "verdict_flips_grapheme_vs_akshara": 0,
+          "flip_rate_grapheme_vs_akshara": 0.0
+        },
+        "ta": {
+          "fail_codepoint": 1363,
+          "fail_grapheme": 312,
+          "fail_akshara": 62,
+          "fail_rate_codepoint": 49.17,
+          "fail_rate_grapheme": 11.26,
+          "fail_rate_akshara": 2.24,
+          "verdict_flips_cp_vs_grapheme": 1051,
+          "flip_rate_cp_vs_grapheme": 37.91,
+          "verdict_flips_grapheme_vs_akshara": 250,
+          "flip_rate_grapheme_vs_akshara": 9.02
+        },
+        "te": {
+          "fail_codepoint": 1323,
+          "fail_grapheme": 105,
+          "fail_akshara": 99,
+          "fail_rate_codepoint": 35.76,
+          "fail_rate_grapheme": 2.84,
+          "fail_rate_akshara": 2.68,
+          "verdict_flips_cp_vs_grapheme": 1218,
+          "flip_rate_cp_vs_grapheme": 32.92,
+          "verdict_flips_grapheme_vs_akshara": 6,
+          "flip_rate_grapheme_vs_akshara": 0.16
+        }
+      },
+      "17": {
+        "bn": {
+          "fail_codepoint": 34,
+          "fail_grapheme": 4,
+          "fail_akshara": 4,
+          "fail_rate_codepoint": 9.69,
+          "fail_rate_grapheme": 1.14,
+          "fail_rate_akshara": 1.14,
+          "verdict_flips_cp_vs_grapheme": 30,
+          "flip_rate_cp_vs_grapheme": 8.55,
+          "verdict_flips_grapheme_vs_akshara": 0,
+          "flip_rate_grapheme_vs_akshara": 0.0
+        },
+        "hi": {
+          "fail_codepoint": 38,
+          "fail_grapheme": 2,
+          "fail_akshara": 2,
+          "fail_rate_codepoint": 10.76,
+          "fail_rate_grapheme": 0.57,
+          "fail_rate_akshara": 0.57,
+          "verdict_flips_cp_vs_grapheme": 36,
+          "flip_rate_cp_vs_grapheme": 10.2,
+          "verdict_flips_grapheme_vs_akshara": 0,
+          "flip_rate_grapheme_vs_akshara": 0.0
+        },
+        "kn": {
+          "fail_codepoint": 310,
+          "fail_grapheme": 85,
+          "fail_akshara": 43,
+          "fail_rate_codepoint": 40.9,
+          "fail_rate_grapheme": 11.21,
+          "fail_rate_akshara": 5.67,
+          "verdict_flips_cp_vs_grapheme": 225,
+          "flip_rate_cp_vs_grapheme": 29.68,
+          "verdict_flips_grapheme_vs_akshara": 42,
+          "flip_rate_grapheme_vs_akshara": 5.54
+        },
+        "ml": {
+          "fail_codepoint": 834,
+          "fail_grapheme": 54,
+          "fail_akshara": 34,
+          "fail_rate_codepoint": 45.13,
+          "fail_rate_grapheme": 2.92,
+          "fail_rate_akshara": 1.84,
+          "verdict_flips_cp_vs_grapheme": 780,
+          "flip_rate_cp_vs_grapheme": 42.21,
+          "verdict_flips_grapheme_vs_akshara": 20,
+          "flip_rate_grapheme_vs_akshara": 1.08
+        },
+        "mr": {
+          "fail_codepoint": 198,
+          "fail_grapheme": 31,
+          "fail_akshara": 31,
+          "fail_rate_codepoint": 27.2,
+          "fail_rate_grapheme": 4.26,
+          "fail_rate_akshara": 4.26,
+          "verdict_flips_cp_vs_grapheme": 167,
+          "flip_rate_cp_vs_grapheme": 22.94,
+          "verdict_flips_grapheme_vs_akshara": 0,
+          "flip_rate_grapheme_vs_akshara": 0.0
+        },
+        "ta": {
+          "fail_codepoint": 1033,
+          "fail_grapheme": 155,
+          "fail_akshara": 23,
+          "fail_rate_codepoint": 37.27,
+          "fail_rate_grapheme": 5.59,
+          "fail_rate_akshara": 0.83,
+          "verdict_flips_cp_vs_grapheme": 878,
+          "flip_rate_cp_vs_grapheme": 31.67,
+          "verdict_flips_grapheme_vs_akshara": 132,
+          "flip_rate_grapheme_vs_akshara": 4.76
+        },
+        "te": {
+          "fail_codepoint": 906,
+          "fail_grapheme": 44,
+          "fail_akshara": 43,
+          "fail_rate_codepoint": 24.49,
+          "fail_rate_grapheme": 1.19,
+          "fail_rate_akshara": 1.16,
+          "verdict_flips_cp_vs_grapheme": 862,
+          "flip_rate_cp_vs_grapheme": 23.3,
+          "verdict_flips_grapheme_vs_akshara": 1,
+          "flip_rate_grapheme_vs_akshara": 0.03
+        }
+      },
+      "20": {
+        "bn": {
+          "fail_codepoint": 11,
+          "fail_grapheme": 2,
+          "fail_akshara": 2,
+          "fail_rate_codepoint": 3.13,
+          "fail_rate_grapheme": 0.57,
+          "fail_rate_akshara": 0.57,
+          "verdict_flips_cp_vs_grapheme": 9,
+          "flip_rate_cp_vs_grapheme": 2.56,
+          "verdict_flips_grapheme_vs_akshara": 0,
+          "flip_rate_grapheme_vs_akshara": 0.0
+        },
+        "hi": {
+          "fail_codepoint": 14,
+          "fail_grapheme": 0,
+          "fail_akshara": 0,
+          "fail_rate_codepoint": 3.97,
+          "fail_rate_grapheme": 0.0,
+          "fail_rate_akshara": 0.0,
+          "verdict_flips_cp_vs_grapheme": 14,
+          "flip_rate_cp_vs_grapheme": 3.97,
+          "verdict_flips_grapheme_vs_akshara": 0,
+          "flip_rate_grapheme_vs_akshara": 0.0
+        },
+        "kn": {
+          "fail_codepoint": 233,
+          "fail_grapheme": 34,
+          "fail_akshara": 10,
+          "fail_rate_codepoint": 30.74,
+          "fail_rate_grapheme": 4.49,
+          "fail_rate_akshara": 1.32,
+          "verdict_flips_cp_vs_grapheme": 199,
+          "flip_rate_cp_vs_grapheme": 26.25,
+          "verdict_flips_grapheme_vs_akshara": 24,
+          "flip_rate_grapheme_vs_akshara": 3.17
+        },
+        "ml": {
+          "fail_codepoint": 553,
+          "fail_grapheme": 12,
+          "fail_akshara": 7,
+          "fail_rate_codepoint": 29.92,
+          "fail_rate_grapheme": 0.65,
+          "fail_rate_akshara": 0.38,
+          "verdict_flips_cp_vs_grapheme": 541,
+          "flip_rate_cp_vs_grapheme": 29.27,
+          "verdict_flips_grapheme_vs_akshara": 5,
+          "flip_rate_grapheme_vs_akshara": 0.27
+        },
+        "mr": {
+          "fail_codepoint": 117,
+          "fail_grapheme": 11,
+          "fail_akshara": 11,
+          "fail_rate_codepoint": 16.07,
+          "fail_rate_grapheme": 1.51,
+          "fail_rate_akshara": 1.51,
+          "verdict_flips_cp_vs_grapheme": 106,
+          "flip_rate_cp_vs_grapheme": 14.56,
+          "verdict_flips_grapheme_vs_akshara": 0,
+          "flip_rate_grapheme_vs_akshara": 0.0
+        },
+        "ta": {
+          "fail_codepoint": 629,
+          "fail_grapheme": 47,
+          "fail_akshara": 4,
+          "fail_rate_codepoint": 22.69,
+          "fail_rate_grapheme": 1.7,
+          "fail_rate_akshara": 0.14,
+          "verdict_flips_cp_vs_grapheme": 582,
+          "flip_rate_cp_vs_grapheme": 21.0,
+          "verdict_flips_grapheme_vs_akshara": 43,
+          "flip_rate_grapheme_vs_akshara": 1.55
+        },
+        "te": {
+          "fail_codepoint": 466,
+          "fail_grapheme": 14,
+          "fail_akshara": 13,
+          "fail_rate_codepoint": 12.59,
+          "fail_rate_grapheme": 0.38,
+          "fail_rate_akshara": 0.35,
+          "verdict_flips_cp_vs_grapheme": 452,
+          "flip_rate_cp_vs_grapheme": 12.22,
+          "verdict_flips_grapheme_vs_akshara": 1,
+          "flip_rate_grapheme_vs_akshara": 0.03
+        }
+      },
+      "22": {
+        "bn": {
+          "fail_codepoint": 10,
+          "fail_grapheme": 2,
+          "fail_akshara": 2,
+          "fail_rate_codepoint": 2.85,
+          "fail_rate_grapheme": 0.57,
+          "fail_rate_akshara": 0.57,
+          "verdict_flips_cp_vs_grapheme": 8,
+          "flip_rate_cp_vs_grapheme": 2.28,
+          "verdict_flips_grapheme_vs_akshara": 0,
+          "flip_rate_grapheme_vs_akshara": 0.0
+        },
+        "hi": {
+          "fail_codepoint": 8,
+          "fail_grapheme": 0,
+          "fail_akshara": 0,
+          "fail_rate_codepoint": 2.27,
+          "fail_rate_grapheme": 0.0,
+          "fail_rate_akshara": 0.0,
+          "verdict_flips_cp_vs_grapheme": 8,
+          "flip_rate_cp_vs_grapheme": 2.27,
+          "verdict_flips_grapheme_vs_akshara": 0,
+          "flip_rate_grapheme_vs_akshara": 0.0
+        },
+        "kn": {
+          "fail_codepoint": 184,
+          "fail_grapheme": 21,
+          "fail_akshara": 7,
+          "fail_rate_codepoint": 24.27,
+          "fail_rate_grapheme": 2.77,
+          "fail_rate_akshara": 0.92,
+          "verdict_flips_cp_vs_grapheme": 163,
+          "flip_rate_cp_vs_grapheme": 21.5,
+          "verdict_flips_grapheme_vs_akshara": 14,
+          "flip_rate_grapheme_vs_akshara": 1.85
+        },
+        "ml": {
+          "fail_codepoint": 426,
+          "fail_grapheme": 5,
+          "fail_akshara": 3,
+          "fail_rate_codepoint": 23.05,
+          "fail_rate_grapheme": 0.27,
+          "fail_rate_akshara": 0.16,
+          "verdict_flips_cp_vs_grapheme": 421,
+          "flip_rate_cp_vs_grapheme": 22.78,
+          "verdict_flips_grapheme_vs_akshara": 2,
+          "flip_rate_grapheme_vs_akshara": 0.11
+        },
+        "mr": {
+          "fail_codepoint": 79,
+          "fail_grapheme": 9,
+          "fail_akshara": 9,
+          "fail_rate_codepoint": 10.85,
+          "fail_rate_grapheme": 1.24,
+          "fail_rate_akshara": 1.24,
+          "verdict_flips_cp_vs_grapheme": 70,
+          "flip_rate_cp_vs_grapheme": 9.62,
+          "verdict_flips_grapheme_vs_akshara": 0,
+          "flip_rate_grapheme_vs_akshara": 0.0
+        },
+        "ta": {
+          "fail_codepoint": 405,
+          "fail_grapheme": 36,
+          "fail_akshara": 0,
+          "fail_rate_codepoint": 14.61,
+          "fail_rate_grapheme": 1.3,
+          "fail_rate_akshara": 0.0,
+          "verdict_flips_cp_vs_grapheme": 369,
+          "flip_rate_cp_vs_grapheme": 13.31,
+          "verdict_flips_grapheme_vs_akshara": 36,
+          "flip_rate_grapheme_vs_akshara": 1.3
+        },
+        "te": {
+          "fail_codepoint": 282,
+          "fail_grapheme": 7,
+          "fail_akshara": 6,
+          "fail_rate_codepoint": 7.62,
+          "fail_rate_grapheme": 0.19,
+          "fail_rate_akshara": 0.16,
+          "verdict_flips_cp_vs_grapheme": 275,
+          "flip_rate_cp_vs_grapheme": 7.43,
+          "verdict_flips_grapheme_vs_akshara": 1,
+          "flip_rate_grapheme_vs_akshara": 0.03
+        }
+      },
+      "25": {
+        "bn": {
+          "fail_codepoint": 5,
+          "fail_grapheme": 2,
+          "fail_akshara": 2,
+          "fail_rate_codepoint": 1.42,
+          "fail_rate_grapheme": 0.57,
+          "fail_rate_akshara": 0.57,
+          "verdict_flips_cp_vs_grapheme": 3,
+          "flip_rate_cp_vs_grapheme": 0.85,
+          "verdict_flips_grapheme_vs_akshara": 0,
+          "flip_rate_grapheme_vs_akshara": 0.0
+        },
+        "hi": {
+          "fail_codepoint": 4,
+          "fail_grapheme": 0,
+          "fail_akshara": 0,
+          "fail_rate_codepoint": 1.13,
+          "fail_rate_grapheme": 0.0,
+          "fail_rate_akshara": 0.0,
+          "verdict_flips_cp_vs_grapheme": 4,
+          "flip_rate_cp_vs_grapheme": 1.13,
+          "verdict_flips_grapheme_vs_akshara": 0,
+          "flip_rate_grapheme_vs_akshara": 0.0
+        },
+        "kn": {
+          "fail_codepoint": 108,
+          "fail_grapheme": 7,
+          "fail_akshara": 2,
+          "fail_rate_codepoint": 14.25,
+          "fail_rate_grapheme": 0.92,
+          "fail_rate_akshara": 0.26,
+          "verdict_flips_cp_vs_grapheme": 101,
+          "flip_rate_cp_vs_grapheme": 13.32,
+          "verdict_flips_grapheme_vs_akshara": 5,
+          "flip_rate_grapheme_vs_akshara": 0.66
+        },
+        "ml": {
+          "fail_codepoint": 241,
+          "fail_grapheme": 2,
+          "fail_akshara": 1,
+          "fail_rate_codepoint": 13.04,
+          "fail_rate_grapheme": 0.11,
+          "fail_rate_akshara": 0.05,
+          "verdict_flips_cp_vs_grapheme": 239,
+          "flip_rate_cp_vs_grapheme": 12.93,
+          "verdict_flips_grapheme_vs_akshara": 1,
+          "flip_rate_grapheme_vs_akshara": 0.05
+        },
+        "mr": {
+          "fail_codepoint": 41,
+          "fail_grapheme": 2,
+          "fail_akshara": 2,
+          "fail_rate_codepoint": 5.63,
+          "fail_rate_grapheme": 0.27,
+          "fail_rate_akshara": 0.27,
+          "verdict_flips_cp_vs_grapheme": 39,
+          "flip_rate_cp_vs_grapheme": 5.36,
+          "verdict_flips_grapheme_vs_akshara": 0,
+          "flip_rate_grapheme_vs_akshara": 0.0
+        },
+        "ta": {
+          "fail_codepoint": 212,
+          "fail_grapheme": 10,
+          "fail_akshara": 0,
+          "fail_rate_codepoint": 7.65,
+          "fail_rate_grapheme": 0.36,
+          "fail_rate_akshara": 0.0,
+          "verdict_flips_cp_vs_grapheme": 202,
+          "flip_rate_cp_vs_grapheme": 7.29,
+          "verdict_flips_grapheme_vs_akshara": 10,
+          "flip_rate_grapheme_vs_akshara": 0.36
+        },
+        "te": {
+          "fail_codepoint": 150,
+          "fail_grapheme": 3,
+          "fail_akshara": 3,
+          "fail_rate_codepoint": 4.05,
+          "fail_rate_grapheme": 0.08,
+          "fail_rate_akshara": 0.08,
+          "verdict_flips_cp_vs_grapheme": 147,
+          "flip_rate_cp_vs_grapheme": 3.97,
+          "verdict_flips_grapheme_vs_akshara": 0,
+          "flip_rate_grapheme_vs_akshara": 0.0
+        }
+      }
+    },
+    "q3b_line_length": {
+      "bn": {
+        "over_limit_codepoint": 67,
+        "over_limit_grapheme": 18,
+        "over_limit_akshara": 18,
+        "flips_cp_vs_grapheme": 49
+      },
+      "hi": {
+        "over_limit_codepoint": 150,
+        "over_limit_grapheme": 80,
+        "over_limit_akshara": 80,
+        "flips_cp_vs_grapheme": 70
+      },
+      "kn": {
+        "over_limit_codepoint": 375,
+        "over_limit_grapheme": 186,
+        "over_limit_akshara": 145,
+        "flips_cp_vs_grapheme": 189
+      },
+      "ml": {
+        "over_limit_codepoint": 766,
+        "over_limit_grapheme": 163,
+        "over_limit_akshara": 147,
+        "flips_cp_vs_grapheme": 603
+      },
+      "mr": {
+        "over_limit_codepoint": 262,
+        "over_limit_grapheme": 105,
+        "over_limit_akshara": 105,
+        "flips_cp_vs_grapheme": 157
+      },
+      "ta": {
+        "over_limit_codepoint": 457,
+        "over_limit_grapheme": 174,
+        "over_limit_akshara": 113,
+        "flips_cp_vs_grapheme": 283
+      },
+      "te": {
+        "over_limit_codepoint": 382,
+        "over_limit_grapheme": 32,
+        "over_limit_akshara": 30,
+        "flips_cp_vs_grapheme": 350
+      }
+    },
+    "q5_examples_widest_divergence": [
+      {
+        "language": "te",
+        "text": "స్పార్క్స్! స్పార్క్స్!",
+        "codepoints": 23,
+        "graphemes": 7,
+        "aksharas": 5,
+        "codepoint_per_grapheme": 3.286,
+        "cps_codepoint": 13.6418,
+        "cps_grapheme": 4.1518,
+        "duration_ms": 1686
+      },
+      {
+        "language": "ml",
+        "text": "സ്റ്റീംഷിപ്പ് ടിക്കറ്റ്.",
+        "codepoints": 24,
+        "graphemes": 8,
+        "aksharas": 6,
+        "codepoint_per_grapheme": 3.0,
+        "cps_codepoint": 11.994,
+        "cps_grapheme": 3.998,
+        "duration_ms": 2001
+      },
+      {
+        "language": "ml",
+        "text": "ശ്രദ്ധിക്ക്!",
+        "codepoints": 12,
+        "graphemes": 4,
+        "aksharas": 3,
+        "codepoint_per_grapheme": 3.0,
+        "cps_codepoint": 8.0863,
+        "cps_grapheme": 2.6954,
+        "duration_ms": 1484
+      },
+      {
+        "language": "ml",
+        "text": "ശ്രദ്ധിക്ക്!",
+        "codepoints": 12,
+        "graphemes": 4,
+        "aksharas": 3,
+        "codepoint_per_grapheme": 3.0,
+        "cps_codepoint": 8.0863,
+        "cps_grapheme": 2.6954,
+        "duration_ms": 1484
+      },
+      {
+        "language": "te",
+        "text": "ఆర్మ్‌రెస్ట్",
+        "codepoints": 12,
+        "graphemes": 4,
+        "aksharas": 3,
+        "codepoint_per_grapheme": 3.0,
+        "cps_codepoint": 9.6,
+        "cps_grapheme": 3.2,
+        "duration_ms": 1250
+      },
+      {
+        "language": "te",
+        "text": "[గ్యాస్ప్స్]",
+        "codepoints": 12,
+        "graphemes": 4,
+        "aksharas": 3,
+        "codepoint_per_grapheme": 3.0,
+        "cps_codepoint": 37.037,
+        "cps_grapheme": 12.3457,
+        "duration_ms": 324
+      },
+      {
+        "language": "hi",
+        "text": "स्प्रिंगफील्ड?",
+        "codepoints": 14,
+        "graphemes": 5,
+        "aksharas": 5,
+        "codepoint_per_grapheme": 2.8,
+        "cps_codepoint": 14.5833,
+        "cps_grapheme": 5.2083,
+        "duration_ms": 960
+      },
+      {
+        "language": "ml",
+        "text": "ഡ്രിപ്പ്-ഡ്രൈ.",
+        "codepoints": 14,
+        "graphemes": 5,
+        "aksharas": 4,
+        "codepoint_per_grapheme": 2.8,
+        "cps_codepoint": 6.2195,
+        "cps_grapheme": 2.2212,
+        "duration_ms": 2251
+      }
+    ],
+    "q5_examples_narrowest_divergence": [
+      {
+        "language": "bn",
+        "text": "12 বছর আগের নকশা",
+        "codepoints": 16,
+        "graphemes": 14,
+        "aksharas": 14,
+        "codepoint_per_grapheme": 1.143,
+        "cps_codepoint": 3.3106,
+        "cps_grapheme": 2.8968,
+        "duration_ms": 4833
+      },
+      {
+        "language": "kn",
+        "text": "ಜಯ ಜಯ ಜಯ ಜಯ ಹೇ",
+        "codepoints": 14,
+        "graphemes": 13,
+        "aksharas": 13,
+        "codepoint_per_grapheme": 1.077,
+        "cps_codepoint": 2.6341,
+        "cps_grapheme": 2.4459,
+        "duration_ms": 5315
+      },
+      {
+        "language": "kn",
+        "text": "ಜಯ ಜಯ ಜಯ ಜಯ ಹೇ",
+        "codepoints": 14,
+        "graphemes": 13,
+        "aksharas": 13,
+        "codepoint_per_grapheme": 1.077,
+        "cps_codepoint": 3.9829,
+        "cps_grapheme": 3.6984,
+        "duration_ms": 3515
+      },
+      {
+        "language": "mr",
+        "text": "जय जय जय जय हे!",
+        "codepoints": 15,
+        "graphemes": 14,
+        "aksharas": 14,
+        "codepoint_per_grapheme": 1.071,
+        "cps_codepoint": 2.8846,
+        "cps_grapheme": 2.6923,
+        "duration_ms": 5200
+      },
+      {
+        "language": "mr",
+        "text": "जय जय जय जय हे।।",
+        "codepoints": 16,
+        "graphemes": 15,
+        "aksharas": 15,
+        "codepoint_per_grapheme": 1.067,
+        "cps_codepoint": 4.5519,
+        "cps_grapheme": 4.2674,
+        "duration_ms": 3515
+      }
+    ],
+    "q3_flip_examples_at_20cps": [
+      {
+        "language": "te",
+        "text": "[గ్యాస్ప్స్]",
+        "duration_ms": 324,
+        "codepoints": 12,
+        "graphemes": 4,
+        "cps_codepoint": 37.037,
+        "cps_grapheme": 12.3457,
+        "codepoint_verdict": "FAIL",
+        "grapheme_verdict": "pass"
+      },
+      {
+        "language": "ml",
+        "text": "എന്തെങ്കിലും കുരുത്തക്കേടു കാണിച്ചാല്‍ അല്ലെങ്കില്‍ ആരോടെങ്കിലും സംസാരിക്കാന്‍ ശ്രമിച്ചാല്",
+        "duration_ms": 3044,
+        "codepoints": 126,
+        "graphemes": 54,
+        "cps_codepoint": 41.3929,
+        "cps_grapheme": 17.7398,
+        "codepoint_verdict": "FAIL",
+        "grapheme_verdict": "pass"
+      },
+      {
+        "language": "ml",
+        "text": "യുക്തിരഹിതമായി ചിന്തിക്കുന്നത്  സ്ത്രീത്വത്തിന്റെ ഭാഗമാണെന്ന് സ്ത്രീകള്‍ കരുതുന്നുണ്ടോ? അത",
+        "duration_ms": 3460,
+        "codepoints": 129,
+        "graphemes": 60,
+        "cps_codepoint": 37.2832,
+        "cps_grapheme": 17.341,
+        "codepoint_verdict": "FAIL",
+        "grapheme_verdict": "pass"
+      },
+      {
+        "language": "te",
+        "text": "(పురుషులు కాస్త అరుస్తూ మాట్లాడుతున్నారు)",
+        "duration_ms": 1060,
+        "codepoints": 41,
+        "graphemes": 20,
+        "cps_codepoint": 38.6792,
+        "cps_grapheme": 18.8679,
+        "codepoint_verdict": "FAIL",
+        "grapheme_verdict": "pass"
+      },
+      {
+        "language": "ml",
+        "text": "മിസിസ് ലാമ്പർട്ട്, ഞാൻ ജീവിച്ചിരിപ്പുണ്ടെന്ന് അവർക്ക് അറിയാമായിരുന്നു, പക്ഷേ അവർ എന്നെ അവി",
+        "duration_ms": 2710,
+        "codepoints": 105,
+        "graphemes": 54,
+        "cps_codepoint": 38.7454,
+        "cps_grapheme": 19.9262,
+        "codepoint_verdict": "FAIL",
+        "grapheme_verdict": "pass"
+      },
+      {
+        "language": "te",
+        "text": "- మీరు అబ్బాయిలు నిర్లక్ష్యంగా వ్యవహరిస్తున్నారు.",
+        "duration_ms": 1395,
+        "codepoints": 49,
+        "graphemes": 23,
+        "cps_codepoint": 35.1254,
+        "cps_grapheme": 16.4875,
+        "codepoint_verdict": "FAIL",
+        "grapheme_verdict": "pass"
+      },
+      {
+        "language": "ml",
+        "text": "ആ രാത്രിയിൽ നിന്നെ വീണ്ടും കാണാൻ കഴിഞ്ഞിരുന്നെങ്കിൽ എന്ന് ഞാൻ ആഗ്രഹിക്കുന്നു.",
+        "duration_ms": 2180,
+        "codepoints": 77,
+        "graphemes": 37,
+        "cps_codepoint": 35.3211,
+        "cps_grapheme": 16.9725,
+        "codepoint_verdict": "FAIL",
+        "grapheme_verdict": "pass"
+      },
+      {
+        "language": "ml",
+        "text": "അപ്പോൾ എനിക്ക് അതിനു യോജിക്കുന്ന ഒരു സ്യൂട്ട് തിരഞ്ഞെടുക്കാൻ പറ്റും",
+        "duration_ms": 1959,
+        "codepoints": 67,
+        "graphemes": 32,
+        "cps_codepoint": 34.2011,
+        "cps_grapheme": 16.3349,
+        "codepoint_verdict": "FAIL",
+        "grapheme_verdict": "pass"
+      }
+    ],
+    "q3_total_flips_at_20cps": 1902
+  }
+}
