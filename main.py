@@ -1,3 +1,4 @@
+import os
 import uuid
 
 from fastapi import FastAPI, Request
@@ -28,6 +29,23 @@ app.mount(
 templates = Jinja2Templates(
     directory="templates"
 )
+
+
+def _asset_version() -> str:
+    """Cache-busting token derived from the newest static file.
+
+    StaticFiles sends an ETag but no Cache-Control, so browsers fall back to
+    heuristic caching and can serve a stale stylesheet after a deploy. Putting
+    the token in the asset URL makes a changed file a different URL.
+    """
+    newest = 0.0
+    for root, _, files in os.walk("static"):
+        for name in files:
+            newest = max(newest, os.path.getmtime(os.path.join(root, name)))
+    return str(int(newest))
+
+
+ASSET_VERSION = _asset_version()
 
 
 def request_id_of(request: Request) -> str:
@@ -106,7 +124,8 @@ async def home(request: Request):
 
     return templates.TemplateResponse(
         request=request,
-        name="index.html"
+        name="index.html",
+        context={"asset_version": ASSET_VERSION},
     )
 
 
