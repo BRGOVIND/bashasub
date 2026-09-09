@@ -10,3 +10,6 @@ __pycache__/
 build/
 dist/
 .hypothesis/
+
+# derived from corpus/ by measure.py; regenerated in seconds, not committed
+research/measurement/results/measurements.csv
