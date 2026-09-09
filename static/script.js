@@ -32,7 +32,7 @@ async function translateText() {
     const data = await response.json();
 
     if (!response.ok) {
-      throw new Error(data.detail || "Request failed");
+      throw new Error(data.error || data.detail || "Request failed");
     }
 
     resultEl.textContent = data.translation;
