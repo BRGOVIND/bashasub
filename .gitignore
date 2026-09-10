@@ -13,3 +13,6 @@ dist/
 
 # derived from corpus/ by measure.py; regenerated in seconds, not committed
 research/measurement/results/measurements.csv
+
+# redstone runtime data: user projects and snapshots, never committed
+workspaces/
