@@ -150,6 +150,16 @@ def resolve(workspace_root: Path | str, user_path: str) -> ResolvedPath:
             raise PathSecurityError(
                 f"path component exceeds {MAX_COMPONENT_LENGTH} characters"
             )
+        # A colon introduces an NTFS alternate data stream ("a.txt:hidden"),
+        # which hides bytes from size accounting, snapshots and change
+        # detection. Windows forbids ':' in real filenames anyway.
+        if ":" in part:
+            raise PathSecurityError("path component must not contain ':'")
+        # Windows silently strips a trailing dot or space, so "id_rsa." opens
+        # "id_rsa" and slips past secret filtering. Neither is a legitimate
+        # component name, so both are refused on every platform.
+        if part != part.rstrip(" ."):
+            raise PathSecurityError("path component must not end with a dot or space")
         # The extension is stripped because "NUL.txt" still names the device.
         if part.split(".")[0].lower() in _RESERVED:
             raise PathSecurityError(f"'{part}' is a reserved device name")

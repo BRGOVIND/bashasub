@@ -51,6 +51,9 @@ class Limits:
     max_log_size: int = 256 * 1024                # bytes retained per runtime
     max_tool_output: int = 64 * 1024
 
+    max_snapshots_per_workspace: int = 20
+    max_snapshot_storage: int = 500 * 1024 * 1024  # bytes across all snapshots
+
     @classmethod
     def from_env(cls) -> Limits:
         # slots=True makes cls.<field> a member descriptor rather than the
@@ -69,6 +72,12 @@ class Limits:
             max_runtime_timeout=_int_env("REDSTONE_MAX_RUNTIME_TIMEOUT", d.max_runtime_timeout),
             max_log_size=_int_env("REDSTONE_MAX_LOG_SIZE", d.max_log_size),
             max_tool_output=_int_env("REDSTONE_MAX_TOOL_OUTPUT", d.max_tool_output),
+            max_snapshots_per_workspace=_int_env(
+                "REDSTONE_MAX_SNAPSHOTS", d.max_snapshots_per_workspace
+            ),
+            max_snapshot_storage=_int_env(
+                "REDSTONE_MAX_SNAPSHOT_STORAGE", d.max_snapshot_storage
+            ),
         )
 
 
