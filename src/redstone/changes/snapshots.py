@@ -32,6 +32,7 @@ from ..workspace.files import (
     _walk,
 )
 from ..workspace.paths import relative_to_workspace
+from ..workspace.safety import is_reparse_point, workspace_lock
 
 __all__ = ["SnapshotError", "FileState", "capture_state", "diff_states",
            "SnapshotStore"]
@@ -164,35 +165,69 @@ class SnapshotStore:
             raise SnapshotError("invalid snapshot id")
         return self.snapshots_root / snapshot_id
 
-    def create(self, project_id: str, label: str = "") -> Snapshot:
-        """Copy the project tree, skipping ignored trees and secret files."""
-        if not self.project_root.is_dir():
-            raise SnapshotError("project directory does not exist")
-
-        snapshot = Snapshot(id=new_id("snap"), project_id=project_id, label=label)
-        destination = self._path_for(snapshot.id)
-        destination.mkdir(parents=True, exist_ok=True)
-
-        count = 0
+    def _storage_used(self) -> int:
+        if not self.snapshots_root.is_dir():
+            return 0
         total = 0
-        for source, _ in _walk(self.project_root, self.limits):
-            relative = relative_to_workspace(source, self.project_root)
-            if is_secret_path(relative):
-                continue
-            target = destination / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
-            count += 1
-            total += source.stat().st_size
+        for path in self.snapshots_root.rglob("*"):
+            if path.is_file():
+                try:
+                    total += path.stat().st_size
+                except OSError:
+                    continue
+        return total
 
-        return Snapshot(
-            id=snapshot.id,
-            project_id=project_id,
-            label=label,
-            file_count=count,
-            total_bytes=total,
-            created_at=snapshot.created_at,
-        )
+    def create(self, project_id: str, label: str = "") -> Snapshot:
+        """Copy the project tree, skipping ignored trees and secret files.
+
+        Quotas are enforced before copying so a project cannot exhaust disk
+        through snapshots. Reparse points are already pruned by the shared walk,
+        so an external junction cannot pull outside content into a snapshot.
+        A hardlinked source is copied by content, which de-links it: the
+        snapshot never preserves a link into another workspace.
+        """
+        with workspace_lock(self.workspace_root):
+            if not self.project_root.is_dir():
+                raise SnapshotError("project directory does not exist")
+
+            existing = self.list_ids()
+            if len(existing) >= self.limits.max_snapshots_per_workspace:
+                raise SnapshotError(
+                    f"snapshot limit reached "
+                    f"({self.limits.max_snapshots_per_workspace} per workspace)"
+                )
+            if self._storage_used() >= self.limits.max_snapshot_storage:
+                raise SnapshotError("snapshot storage limit reached")
+
+            snapshot = Snapshot(id=new_id("snap"), project_id=project_id, label=label)
+            destination = self._path_for(snapshot.id)
+            destination.mkdir(parents=True, exist_ok=True)
+
+            count = 0
+            total = 0
+            try:
+                for source, _ in _walk(self.project_root, self.limits):
+                    relative = relative_to_workspace(source, self.project_root)
+                    if is_secret_path(relative):
+                        continue
+                    target = destination / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, target)
+                    count += 1
+                    total += source.stat().st_size
+            except Exception:
+                # Never leave a half-written snapshot behind.
+                shutil.rmtree(destination, ignore_errors=True)
+                raise
+
+            return Snapshot(
+                id=snapshot.id,
+                project_id=project_id,
+                label=label,
+                file_count=count,
+                total_bytes=total,
+                created_at=snapshot.created_at,
+            )
 
     def exists(self, snapshot_id: str) -> bool:
         return self._path_for(snapshot_id).is_dir()
@@ -203,35 +238,70 @@ class SnapshotStore:
         return tuple(sorted(p.name for p in self.snapshots_root.iterdir() if p.is_dir()))
 
     def restore(self, snapshot_id: str) -> int:
-        """Replace the project tree with the snapshot's contents.
+        """Restore the project to a snapshot, failure-safe.
 
-        Ignored trees such as node_modules are left alone: they are derived
-        from package.json rather than authored, and re-copying them would make
-        rollback unusably slow. Everything the snapshot tracks is restored
-        exactly, and tracked files absent from the snapshot are removed.
+        Guarantee: if this raises, the project is left exactly as it was. This
+        is achieved by building the new tree in a staging directory first (the
+        step that can fail), and only then swapping it into place with
+        directory renames (the steps that essentially cannot fail):
+
+            stage snapshot copy  ->  carry ignored trees over  ->
+            rename project to trash  ->  rename staging to project
+
+        It is not atomic at the syscall level — a crash between the two final
+        renames could leave the project missing, recoverable from trash — but
+        no partial or half-deleted tree is ever produced by an error.
+
+        Ignored trees (node_modules, …) are moved across intact rather than
+        recopied: they are derived, large, and re-copying them would make
+        rollback unusably slow.
         """
-        source = self._path_for(snapshot_id)
-        if not source.is_dir():
-            raise SnapshotError("snapshot not found")
+        with workspace_lock(self.workspace_root):
+            source = self._path_for(snapshot_id)
+            if not source.is_dir():
+                raise SnapshotError("snapshot not found")
 
-        # Remove current tracked files, preserving ignored trees.
-        for entry in list(self.project_root.iterdir()):
-            if entry.name in IGNORED_DIRECTORIES:
-                continue
-            if entry.is_dir():
-                shutil.rmtree(entry)
-            else:
-                entry.unlink()
+            work = self.workspace_root / ".redstone" / "restore"
+            staging = work / f"staging_{new_id('r')}"
+            trash = work / f"trash_{new_id('r')}"
+            staging.mkdir(parents=True)
 
-        restored = 0
-        for path, _ in _walk(source, self.limits):
-            relative = relative_to_workspace(path, source)
-            target = self.project_root / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, target)
-            restored += 1
+            # 1. Build the replacement tree. Any failure here leaves the live
+            #    project untouched, because nothing live has changed yet.
+            restored = 0
+            try:
+                for path, _ in _walk(source, self.limits):
+                    relative = relative_to_workspace(path, source)
+                    target = staging / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(path, target)
+                    restored += 1
+            except Exception:
+                shutil.rmtree(staging, ignore_errors=True)
+                raise
 
-        return restored
+            # 2. Carry ignored top-level trees (node_modules) into staging so
+            #    the swap preserves them.
+            if self.project_root.is_dir():
+                for entry in list(self.project_root.iterdir()):
+                    if entry.name in IGNORED_DIRECTORIES and entry.is_dir() \
+                            and not is_reparse_point(entry):
+                        entry.rename(staging / entry.name)
+
+            # 3. Swap. Renames are near-instant and rarely fail.
+            try:
+                if self.project_root.exists():
+                    self.project_root.rename(trash)
+                staging.rename(self.project_root)
+            except Exception:
+                # Best-effort recovery of the original tree.
+                if trash.exists() and not self.project_root.exists():
+                    trash.rename(self.project_root)
+                shutil.rmtree(staging, ignore_errors=True)
+                raise SnapshotError("restore failed during swap; project preserved")
+
+            shutil.rmtree(trash, ignore_errors=True)
+            return restored
 
     def delete(self, snapshot_id: str) -> None:
         path = self._path_for(snapshot_id)
