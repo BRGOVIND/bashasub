@@ -24,6 +24,14 @@ from pathlib import Path
 from ..config import Limits
 from ..domain.models import FileEntry
 from .paths import PathSecurityError, relative_to_workspace, resolve
+from .safety import (
+    UnsafeFileError,
+    assert_safe_to_read,
+    assert_safe_to_write,
+    canonical_name,
+    is_reparse_point,
+    workspace_lock,
+)
 
 __all__ = [
     "FileOperationError",
@@ -41,6 +49,8 @@ __all__ = [
     "search_files",
     "project_size",
     "file_hash",
+    "is_secret_path",
+    "UnsafeFileError",
 ]
 
 # Directories that are never listed, searched, snapshotted or sent to a model.
@@ -93,7 +103,12 @@ def is_secret_path(relative_path: str) -> bool:
     cost a credential.
     """
     name = relative_path.rsplit("/", 1)[-1].lower()
+    return _is_secret_name(name)
 
+
+def _is_secret_name(name: str) -> bool:
+    # Trailing dot/space stripped because Windows opens "id_rsa." as "id_rsa".
+    name = name.rstrip(" .").lower()
     if name in SECRET_FILENAMES:
         return True
     if name.endswith(SECRET_SUFFIXES):
@@ -101,6 +116,19 @@ def is_secret_path(relative_path: str) -> bool:
     if any(name.startswith(prefix) for prefix in SECRET_PREFIXES):
         return True
     return False
+
+
+def assert_not_secret(requested_relative: str, absolute: Path) -> None:
+    """Refuse any operation on a credential file.
+
+    Checks the requested name and the file's canonical on-disk name, so a
+    Windows alias (trailing dot, or an 8.3 short name like ID_RSA~1) cannot be
+    used to read a secret past the filename filter. Rejection, never redaction.
+    """
+    if is_secret_path(requested_relative):
+        raise FileOperationError("access to secret files is not permitted")
+    if _is_secret_name(canonical_name(absolute)):
+        raise FileOperationError("access to secret files is not permitted")
 
 
 def _modified(path: Path) -> datetime:
@@ -117,7 +145,20 @@ def file_hash(path: Path) -> str:
 
 
 def _walk(root: Path, limits: Limits):
-    """Yield (absolute_path, depth) for files under root, skipping ignored trees."""
+    """Yield (absolute_path, depth) for real files under root.
+
+    Two rules that matter for security and correctness:
+
+    * Reparse points (symlinks, Windows junctions) are never descended, so a
+      junction planted in the project cannot make a walk enumerate, size, copy
+      or delete an external tree. os.walk does not detect junctions on Windows,
+      so they are pruned explicitly.
+    * The ignore list (node_modules, build, dist, .git, …) applies **only at the
+      project root**. Applying it at every depth silently dropped legitimate
+      source folders such as src/build/ and src/components/dist/, which caused
+      rollback to delete them. Nested occurrences are walked normally.
+    """
+    root = Path(root)
     root_depth = len(root.parts)
 
     for current, directories, filenames in os.walk(root):
@@ -128,12 +169,20 @@ def _walk(root: Path, limits: Limits):
             directories[:] = []
             continue
 
-        # Pruning in place stops os.walk descending, which is what keeps a
-        # node_modules tree from dominating every listing.
-        directories[:] = [d for d in directories if d not in IGNORED_DIRECTORIES]
+        kept = []
+        for name in directories:
+            if depth == 0 and name in IGNORED_DIRECTORIES:
+                continue
+            if is_reparse_point(current_path / name):
+                continue
+            kept.append(name)
+        directories[:] = kept
 
         for name in filenames:
-            yield current_path / name, depth
+            path = current_path / name
+            if is_reparse_point(path):
+                continue
+            yield path, depth
 
 
 def project_size(workspace_root: Path) -> tuple[int, int]:
@@ -225,6 +274,11 @@ def read_file(
     if path.is_dir():
         raise FileOperationError(f"'{resolved.relative}' is a directory")
 
+    # Never hand a credential file to a caller (and, later, to the AI agent).
+    assert_not_secret(resolved.relative, path)
+    # Never read through a hardlink whose data may live outside the workspace.
+    assert_safe_to_read(path)
+
     size = path.stat().st_size
     if size > limits.max_read_size:
         raise FileTooLargeError(
@@ -258,38 +312,55 @@ def write_file(
     # modification that nobody made.
     content = content.replace("\r\n", "\n").replace("\r", "\n")
     encoded = content.encode("utf-8")
+    # Both limits apply: max_write_size bounds one request, max_file_size bounds
+    # the resulting file. They are equal by default but configurable apart.
     if len(encoded) > limits.max_write_size:
         raise FileTooLargeError(
             f"content is {len(encoded)} bytes, over the "
             f"{limits.max_write_size} byte write limit"
+        )
+    if len(encoded) > limits.max_file_size:
+        raise FileTooLargeError(
+            f"content is {len(encoded)} bytes, over the "
+            f"{limits.max_file_size} byte file-size limit"
         )
 
     resolved = resolve(workspace_root, relative_path)
     path = resolved.absolute
     root = Path(workspace_root)
 
-    existing = path.stat().st_size if path.exists() and path.is_file() else 0
-    total, count = project_size(root)
+    # A secret must not be writable-through either, and the size check + write
+    # must be one critical section per workspace so concurrent writers cannot
+    # race past max_project_size.
+    with workspace_lock(root):
+        assert_not_secret(resolved.relative, path)
+        if path.exists():
+            # An existing target must be a plain, single-linked, non-reparse
+            # file, or the write could land on shared or external bytes.
+            assert_safe_to_write(path)
 
-    if total - existing + len(encoded) > limits.max_project_size:
-        raise ProjectTooLargeError(
-            f"writing '{resolved.relative}' would exceed the "
-            f"{limits.max_project_size} byte project limit"
+        existing = path.stat().st_size if path.exists() and path.is_file() else 0
+        total, count = project_size(root)
+
+        if total - existing + len(encoded) > limits.max_project_size:
+            raise ProjectTooLargeError(
+                f"writing '{resolved.relative}' would exceed the "
+                f"{limits.max_project_size} byte project limit"
+            )
+        if existing == 0 and count + 1 > limits.max_files:
+            raise ProjectTooLargeError(f"project already holds {limits.max_files} files")
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Newline normalised so the same content produces the same bytes and the
+        # same hash on every platform, which changesets depend on.
+        path.write_text(content, encoding="utf-8", newline="\n")
+
+        return FileEntry(
+            path=resolved.relative,
+            is_directory=False,
+            size=len(encoded),
+            modified_at=_modified(path),
         )
-    if existing == 0 and count + 1 > limits.max_files:
-        raise ProjectTooLargeError(f"project already holds {limits.max_files} files")
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # Newline normalised so the same content produces the same bytes and the
-    # same hash on every platform, which changesets depend on.
-    path.write_text(content, encoding="utf-8", newline="\n")
-
-    return FileEntry(
-        path=resolved.relative,
-        is_directory=False,
-        size=len(encoded),
-        modified_at=_modified(path),
-    )
 
 
 def create_file(
@@ -300,23 +371,38 @@ def create_file(
 ) -> FileEntry:
     """Write a file that must not already exist."""
     resolved = resolve(workspace_root, relative_path)
-    if resolved.absolute.exists():
-        raise FileOperationError(f"'{resolved.relative}' already exists")
-    return write_file(workspace_root, relative_path, content, limits)
+    # Re-entrant lock: the exists-check and the write are one critical section,
+    # so two concurrent creates cannot both pass the check.
+    with workspace_lock(workspace_root):
+        if resolved.absolute.exists():
+            raise FileOperationError(f"'{resolved.relative}' already exists")
+        return write_file(workspace_root, relative_path, content, limits)
 
 
 def delete_file(workspace_root: Path, relative_path: str) -> str:
-    """Delete a file, or a directory and its contents."""
+    """Delete a file, or a directory and its contents.
+
+    A reparse point (junction/symlink) is removed as a *link* only, never
+    recursed into, so deleting one cannot destroy the external tree it targets.
+    """
     resolved = resolve(workspace_root, relative_path)
     path = resolved.absolute
 
-    if not path.exists():
-        raise NotFoundError(f"'{resolved.relative}' does not exist")
+    with workspace_lock(workspace_root):
+        if not path.exists() and not is_reparse_point(path):
+            raise NotFoundError(f"'{resolved.relative}' does not exist")
 
-    if path.is_dir():
-        shutil.rmtree(path)
-    else:
-        path.unlink()
+        if is_reparse_point(path):
+            # Remove the link itself. os.rmdir unlinks a junction/dir-symlink
+            # without touching its target; unlink handles a file symlink.
+            try:
+                os.rmdir(path)
+            except OSError:
+                path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
 
     return resolved.relative
 
@@ -326,13 +412,21 @@ def rename_file(workspace_root: Path, source: str, destination: str) -> str:
     resolved_source = resolve(workspace_root, source)
     resolved_destination = resolve(workspace_root, destination)
 
-    if not resolved_source.absolute.exists():
-        raise NotFoundError(f"'{resolved_source.relative}' does not exist")
-    if resolved_destination.absolute.exists():
-        raise FileOperationError(f"'{resolved_destination.relative}' already exists")
+    with workspace_lock(workspace_root):
+        if not resolved_source.absolute.exists():
+            raise NotFoundError(f"'{resolved_source.relative}' does not exist")
+        # Do not move a secret, a hardlink or a reparse point: the destination
+        # name would then hide unsafe content behind a benign path.
+        assert_not_secret(resolved_source.relative, resolved_source.absolute)
+        if resolved_source.absolute.is_file():
+            assert_safe_to_write(resolved_source.absolute)
+        elif is_reparse_point(resolved_source.absolute):
+            raise UnsafeFileError("cannot rename a symlink or junction")
+        if resolved_destination.absolute.exists():
+            raise FileOperationError(f"'{resolved_destination.relative}' already exists")
 
-    resolved_destination.absolute.parent.mkdir(parents=True, exist_ok=True)
-    resolved_source.absolute.rename(resolved_destination.absolute)
+        resolved_destination.absolute.parent.mkdir(parents=True, exist_ok=True)
+        resolved_source.absolute.rename(resolved_destination.absolute)
 
     return resolved_destination.relative
 
