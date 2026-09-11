@@ -115,16 +115,46 @@ only becomes real once project code executes, and then belongs to OS isolation.
 the common cases and Windows aliases. Content scanning is not yet implemented,
 so a credential pasted into `src/config.ts` would not be excluded.
 
+## AI credential threat model (Phase 2B)
+
+The AI gateway forwards a provider key to an upstream API. The key — whether
+server-configured or supplied per request (BYOK) — must reach only the provider
+auth header and nothing else.
+
+| # | Threat | Mitigation | Test |
+|---|---|---|---|
+| 25 | **Key in a URL / query string** | Gemini uses the `x-goog-api-key` header, OpenAI-compatible a Bearer header. The key is never interpolated into a URL. | `test_request_url_never_contains_the_key`, `test_key_travels_only_in_the_auth_header` |
+| 26 | **Key in logs** | The gateway logs only `request_id/provider/model/status/duration/attempt/error_code`, and passes the live key through `redact()` as belt-and-braces. | `test_logs_never_carry_the_key` |
+| 27 | **Key in an error / exception** | Every failure is a `RedstoneAIError` with a Redstone-authored message; upstream exception text is redacted before it is even kept for internal logging. | `test_error_never_carries_the_key`, `test_http_status_maps_to_normalised_code` |
+| 28 | **Key in a response** | `AIResponse` has no credential field; `to_dict()` never includes one. | `test_response_object_never_carries_the_key` |
+| 29 | **Key persisted (snapshot/cache/pickle)** | `Credential` refuses pickle/copy, masks repr/str, and there is no credential store. | `test_credential_cannot_be_pickled_or_copied`, `test_credential_repr_is_masked`, `test_no_credential_persists_after_the_call` |
+| 30 | **SSRF via base URL** | `validate_base_url` rejects non-https, credentials-in-URL, and private/loopback/link-local/metadata hosts; BYOK adds a host allowlist. | `test_dangerous_base_urls_are_rejected`, `test_gateway_rejects_ssrf_base_url_for_byok` |
+| 31 | **Auth header following a redirect** | Redirects are disabled on the provider request; a 3xx is never followed. | `test_redirects_are_not_followed_to_another_host` |
+| 32 | **Malformed provider response crashes backend** | Bodies are parsed defensively; a missing candidate or bad JSON becomes `MALFORMED_RESPONSE`. | `test_malformed_json_is_normalised`, `test_missing_candidate_is_malformed` |
+| 33 | **Infinite retries / quota burn** | Bounded attempts; auth and invalid-request never retried. | `test_retries_are_bounded`, `test_non_retryable_statuses_are_not_retried` |
+| 34 | **Unbounded provider output** | Response read incrementally, aborted past `MAX_AI_RESPONSE_SIZE`. | `test_oversized_response_is_rejected` |
+| 35 | **Unbounded request** | Prompt size checked before any call. | `test_oversized_request_is_rejected_before_any_call` |
+| 36 | **Arbitrary provider module import** | Providers resolve from a fixed allowlist; unknown names are a normalised error. | `test_unknown_provider_is_a_safe_error` |
+
+**AI credential known limits.** DNS rebinding is not fully closed: SSRF
+validation resolves the host at configuration time, but the address used at
+request time could differ. Redirects being disabled and the BYOK host allowlist
+narrow this. Full closure needs pinning the resolved address into the request,
+deferred until it matters (no user BYOK endpoint is exposed yet).
+
 ## Verifying the boundary
 
 ```bash
 python -m pytest tests/redstone/test_paths.py -q      # 67 rejection + 15 positive path tests
 python -m pytest tests/redstone/test_hardening.py -q   # 2A.1 vulnerability regressions
+python -m pytest tests/redstone/test_ai_gateway.py -q  # AI gateway + credential safety
 python -m pytest tests/redstone/ -q                   # full foundation suite
 
-# The core must never execute anything or import a framework:
+# The deterministic core must never execute anything or import a web framework:
 grep -rnE "subprocess|shell=True|eval\(|exec\(|os\.system" src/redstone/
-grep -rnE "^\s*(import|from)\s+(fastapi|httpx|requests)" src/redstone/
+grep -rnE "^\s*(import|from)\s+(fastapi|requests)" src/redstone/
+# httpx is used ONLY by ai/providers, and only lazily inside post_json:
+grep -rn "import httpx" src/redstone/   # -> src/redstone/ai/providers/base.py
 ```
 
 ## Reporting
