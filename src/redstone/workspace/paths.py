@@ -146,6 +146,13 @@ def resolve(workspace_root: Path | str, user_path: str) -> ResolvedPath:
     parts = [part for part in candidate.split("/") if part not in ("", ".")]
 
     for part in parts:
+        # Checked first and specifically: ".." consists entirely of dots, so
+        # the trailing-dot/space rule below would also catch it, but with a
+        # misleading message ("must not end with a dot or space") instead of
+        # naming what actually happened. Same rejection either way; this is
+        # about error clarity, not security.
+        if part == "..":
+            raise PathSecurityError("parent traversal ('..') is not allowed")
         if len(part) > MAX_COMPONENT_LENGTH:
             raise PathSecurityError(
                 f"path component exceeds {MAX_COMPONENT_LENGTH} characters"
@@ -167,11 +174,10 @@ def resolve(workspace_root: Path | str, user_path: str) -> ResolvedPath:
     if not parts:
         raise PathSecurityError("path must name a file or directory")
 
-    # ".." is rejected outright rather than collapsed. Collapsing is where
-    # traversal bugs live: it invites disagreement between our normalisation and
-    # the operating system's. A project path never legitimately needs "..".
-    if ".." in parts:
-        raise PathSecurityError("parent traversal ('..') is not allowed")
+    # ".." is rejected outright (in the per-component loop above) rather than
+    # collapsed. Collapsing is where traversal bugs live: it invites
+    # disagreement between our normalisation and the operating system's. A
+    # project path never legitimately needs "..".
 
     joined = root.joinpath(*parts)
     real = _real(joined)
