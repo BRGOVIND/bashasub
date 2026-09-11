@@ -54,6 +54,10 @@ class Limits:
     max_snapshots_per_workspace: int = 20
     max_snapshot_storage: int = 500 * 1024 * 1024  # bytes across all snapshots
 
+    max_agent_context_bytes: int = 200 * 1024      # total conversation sent to the model
+    max_tool_argument_size: int = 64 * 1024        # a single string tool argument
+    max_search_results: int = 50                   # agent-facing cap, below the raw tool's own
+
     @classmethod
     def from_env(cls) -> Limits:
         # slots=True makes cls.<field> a member descriptor rather than the
@@ -77,6 +81,15 @@ class Limits:
             ),
             max_snapshot_storage=_int_env(
                 "REDSTONE_MAX_SNAPSHOT_STORAGE", d.max_snapshot_storage
+            ),
+            max_agent_context_bytes=_int_env(
+                "REDSTONE_MAX_AGENT_CONTEXT", d.max_agent_context_bytes
+            ),
+            max_tool_argument_size=_int_env(
+                "REDSTONE_MAX_TOOL_ARGUMENT_SIZE", d.max_tool_argument_size
+            ),
+            max_search_results=_int_env(
+                "REDSTONE_MAX_SEARCH_RESULTS", d.max_search_results
             ),
         )
 

@@ -75,10 +75,14 @@ class ChangeKind(str, Enum):
 
 class EventType(str, Enum):
     AGENT_STARTED = "agent.started"
+    AGENT_STEP_STARTED = "agent.step_started"
     AGENT_TOOL_STARTED = "agent.tool_started"
     AGENT_TOOL_COMPLETED = "agent.tool_completed"
+    AGENT_VALIDATION_STARTED = "agent.validation_started"
+    AGENT_VALIDATION_COMPLETED = "agent.validation_completed"
     AGENT_COMPLETED = "agent.completed"
     AGENT_FAILED = "agent.failed"
+    AGENT_CANCELLED = "agent.cancelled"
     FILE_CHANGED = "file.changed"
     BUILD_STARTED = "build.started"
     BUILD_COMPLETED = "build.completed"
