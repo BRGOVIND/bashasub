@@ -97,6 +97,9 @@ class AIConfig:
     base_url: str = ""
     timeout_seconds: int = 60
     max_retries: int = 2
+    retry_backoff_seconds: float = 0.5           # base for exponential backoff
+    max_request_bytes: int = 1 * 1024 * 1024     # prompt payload ceiling
+    max_response_bytes: int = 8 * 1024 * 1024    # provider response ceiling
 
     @property
     def is_configured(self) -> bool:
@@ -118,8 +121,10 @@ class AIConfig:
             api_key=_str_env("AI_API_KEY"),
             model=_str_env("AI_MODEL", d.model),
             base_url=_str_env("AI_BASE_URL"),
-            timeout_seconds=_int_env("AI_TIMEOUT_SECONDS", d.timeout_seconds),
+            timeout_seconds=_int_env("AI_REQUEST_TIMEOUT", d.timeout_seconds),
             max_retries=_int_env("AI_MAX_RETRIES", d.max_retries),
+            max_request_bytes=_int_env("MAX_AI_REQUEST_SIZE", d.max_request_bytes),
+            max_response_bytes=_int_env("MAX_AI_RESPONSE_SIZE", d.max_response_bytes),
         )
 
 
