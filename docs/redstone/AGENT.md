@@ -4,14 +4,18 @@ Phase 3. A bounded loop that turns a natural-language request into real file
 changes through a fixed set of controlled tools, backed by the Phase 2A/2A.1
 secure workspace and the Phase 2B AI gateway.
 
-> **Phase 3 does not execute arbitrary project code.** There is no tool that
-> runs a shell command, installs a package, or runs the project's own build
-> script. `run_typecheck`/`run_lint`/`run_build` exist as tools today but their
-> only wired-in implementation (`UnavailableValidationRunner`) performs no
-> execution and says so. **Real project execution requires the Phase 4
-> sandbox/runtime isolation boundary**, which does not exist yet. Building
-> that boundary, not the agent, is what makes running the project's own code
-> safe.
+> **The agent still has no tool that runs a shell command, installs a
+> package, or names an arbitrary command.** That did not change when Phase
+> 4/5 built the sandbox/runtime isolation boundary this document originally
+> said was missing. `run_typecheck`/`run_lint`/`run_build` are the only
+> "execution" surface, and they still only ever select one of a fixed
+> `Operation` enum — never a string. What changed is what backs them: a
+> composition root can now inject `redstone.runtime.SandboxValidationRunner`
+> (Phase 4/5, see `docs/redstone/SANDBOX.md` / `RUNTIME.md`) so those three
+> tools actually run inside the sandbox instead of reporting `unavailable`.
+> `AgentService`'s own default is still `UnavailableValidationRunner` unless
+> a caller explicitly passes a different one in — the agent itself was not
+> modified to reach for a sandbox on its own.
 
 ## Architecture
 
@@ -104,7 +108,7 @@ gateway.
 | `create_file` | mutate | `path`, `content?` | must not already exist |
 | `delete_file` | mutate | `path` | files or directories |
 | `rename_file` | mutate | `source`, `destination` | both ends validated |
-| `run_typecheck` / `run_lint` / `run_build` | validate | — | `UnavailableValidationRunner` by default; see above |
+| `run_typecheck` / `run_lint` / `run_build` | validate | — | `UnavailableValidationRunner` unless a `SandboxValidationRunner` is injected; see above |
 
 There is **no** `run_command`, `shell`, `exec`, `terminal`, `npm_install`,
 `curl`, or `wget` tool, and none can be added by a model at runtime: the
@@ -218,6 +222,10 @@ project; the server looks up its workspace internally
 (`AgentService.get_project(project_id).workspace_id`). This is not a validation
 rule to bypass; there is structurally no field to put one in.
 
+The same app (`redstone/api/app.py`) also exposes the Phase 4/5 runtime
+endpoints (`/api/projects/{id}/runtime`, `.../start`, `.../stop`,
+`.../restart`) — documented in `docs/redstone/RUNTIME.md`, not repeated here.
+
 A new, separate FastAPI app (`redstone/api/app.py`) — not wired into the
 existing `main.py` BhashaSub service, and not deployed.
 
@@ -275,5 +283,8 @@ every request), `FailingAIGateway`, and a `FakeValidationRunner` that exists
 - **Cancellation is only meaningfully exercised via `background=True`.** The
   synchronous path (used by the HTTP API) has no other thread to call
   `cancel_task` from during the run.
-- **Validation tools perform no real execution.** This is the correct
-  Phase 3 behaviour, not a bug — see the callout at the top of this document.
+- **Validation tools perform no real execution by default.** `AgentService`'s
+  default `ValidationRunner` is still `UnavailableValidationRunner`; a
+  composition root must explicitly inject `SandboxValidationRunner` (Phase
+  4/5) to get real typecheck/lint/build results. See the callout at the top
+  of this document.

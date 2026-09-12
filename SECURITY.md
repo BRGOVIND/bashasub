@@ -4,27 +4,37 @@ Redstone runs code it did not write: files produced by an AI model, and
 packages chosen by a user. The whole design follows from treating that code as
 hostile.
 
-> **Status: Phase 2A + 2A.1 (foundation, hardened).** The workspace, path and secret boundaries
-> below are implemented and tested. The runtime, preview, agent and AI layers
-> are **not yet built**; their rows say so explicitly. Nothing in this document
-> describes a control that does not exist.
+> **Status: Phase 2A/2A.1 (filesystem) + 2B (AI gateway) + 3 (coding agent) +
+> 4/5 (sandbox + runtime manager), all implemented and tested.** The
+> browser-facing live preview (Phase 6) is **not yet built**; its rows say so
+> explicitly. Nothing in this document describes a control that does not
+> exist, and every "not yet built" row is honest about being unimplemented
+> rather than a placeholder for something assumed to work.
 
 ## Trust boundary
 
 ```
-TRUSTED                              UNTRUSTED
-────────────────────────────────     ──────────────────────────────
-Redstone backend                     AI-generated code
-AI gateway + provider credentials     npm packages and their scripts
-Workspace manager                     package.json scripts
-Snapshot store (.redstone/)           project source files
-Configuration and limits              the running dev server
-                                      the preview document
+TRUSTED                    CONTROLLED BRIDGE           UNTRUSTED
+──────────────────────     ──────────────────────      ──────────────────────
+Redstone backend           SandboxProvider              AI-generated code
+AI gateway + credentials   (Docker CLI, argv only,      npm packages + scripts
+Workspace manager           never a shell string)       package.json scripts
+Snapshot store (.redstone/) RuntimeManager               project source files
+Configuration and limits   (fixed Operation enum,        the running dev server
+Coding agent + tools        never an arbitrary          the preview document
+                             command string)
 ```
 
 Untrusted content must never reach the trusted side except as **data**. A
 project file is never executed by the backend, never interpolated into a shell
-command, and never treated as an instruction to the agent.
+command, and never treated as an instruction to the agent. Everything to the
+right of the bridge — the project's own source, its dependencies, their
+install/lifecycle scripts, and the dev server they start — runs only inside a
+sandbox (Phase 4), never on the machine running Redstone itself. The bridge is
+"controlled" because both directions across it are limited to a fixed,
+Redstone-authored vocabulary: `SandboxConfig` going in (never "inherit the
+host"), `SandboxResult`/`SandboxStatus` coming out (never a raw stdout stream
+trusted as fact).
 
 ## The workspace boundary
 
@@ -67,28 +77,65 @@ structurally unreachable from inside the project rather than merely hidden.
 | 16a | **Partial-restore data loss** (2A.1) | Restore stages the new tree first (the fallible step), then swaps by directory rename. A failure during staging leaves the live project exactly as it was. Not syscall-atomic; see Known risks. | `test_failed_restore_leaves_the_project_intact` |
 | 17 | **Rollback affecting another project** | The store is per workspace and only writes under its own `project/`, inside the workspace lock. | `test_rollback_only_touches_its_own_project`, `test_two_workspaces_are_independent` |
 | 18 | **Fabricated change reporting** | Changesets are computed by hashing the filesystem before and after, never from the model's account. Unannounced edits still appear. | `test_changeset_reports_the_real_filesystem_not_a_claim` |
-| 19 | **Arbitrary command execution** | ⏳ **Not yet applicable.** No subprocess execution exists in Phase 2A. `grep -rn "subprocess\|shell=True\|eval(\|exec(" src/redstone/` returns nothing. | verified by inspection |
-| 20 | **Dependency install on the trusted host** | ⏳ **Not mitigated — see Known risks.** No install path exists yet, and none may be added outside an isolated runtime. | — |
-| 21 | **Preview breakout / XSS** | ⏳ **Not yet built.** Planned: separate origin, sandboxed iframe, CSP. | — |
-| 22 | **SSRF / internal network access** | ⏳ **Not yet built.** Planned: no network by default, explicit allowlist. | — |
-| 23 | **Prompt injection from project files** | ⏳ **Not yet built.** Planned: repository content passed as data with a fixed system prompt that content cannot override. | — |
-| 24 | **Provider error leaking credentials** | ⏳ **Not yet built.** Planned: normalise every upstream failure into `ErrorModel`; never surface raw exception text. | — |
+| 19 | **Arbitrary command execution** | The trusted backend itself still executes nothing (`grep -rn "subprocess" src/redstone/` outside `sandbox/`/`ai/` returns nothing). Execution now exists, but only *inside* the sandbox, and only as one of five fixed named operations (`Operation` enum) resolved through a static `(Framework, Operation) -> argv` table — never a string built from agent output or project content. | `test_dangerous_flags_never_appear_in_the_constructed_argv`; `SandboxCommand.resolve()` unit tests (`UNSUPPORTED_OPERATION` for any framework/operation not in the table) |
+| 20 | **Dependency install on the trusted host** | **Mitigated (Phase 4).** `npm install` runs only inside an ephemeral, network-restricted (`NetworkPolicy.INSTALL_ONLY`) sandbox, destroyed immediately after; it never touches the Redstone process's own filesystem or environment. | `test_real_npm_install_succeeds_over_install_only_network`, `RuntimeManager._run_install` (always `provider.destroy()`s in a `finally`) |
+| 21 | **Preview breakout / XSS** | ⏳ **Not yet built (Phase 6).** Planned: separate origin, sandboxed iframe, CSP. | — |
+| 22 | **SSRF / internal network access from running project code** | **Mitigated (Phase 4).** `NetworkPolicy.DENY` (`--network none`) is the default and the only policy used once the dev server is running — the container has no network device at all, so no address is reachable, internal or otherwise. Install-phase egress (`INSTALL_ONLY`) is real and unrestricted beyond "outbound only, no published ports" — see Known risks. | `test_network_deny_blocks_outbound`, `test_full_lifecycle_against_real_docker` |
+| 23 | **Prompt injection from project files** | **Mitigated — see #46 (Phase 3).** This row predates Phase 3; left numbered rather than renumbering the table. | see #46 |
+| 24 | **Provider error leaking credentials** | **Mitigated — see #27 (Phase 2B).** This row predates Phase 2B; left numbered rather than renumbering the table. | see #27 |
 
 ## Known risks, stated plainly
 
-**A local process runtime is not a security boundary.** When the runtime layer
-is built, a `LocalProcessRuntime` will run project code as the same OS user,
-with the same filesystem and network reach, as the backend. `npm install`
-executes arbitrary `postinstall` scripts. That is acceptable for local
-development and **not acceptable in production**. Production requires container
-or VM isolation. This is recorded here rather than discovered later.
+**`LocalProcessSandboxProvider` is not a security boundary — by design, not by
+accident.** It runs project code as the same OS user, with the same
+filesystem and network reach, as the backend, and its class explicitly
+declares `is_isolated = False` so nothing downstream can mistake it for
+real isolation. It exists only for (a) Docker-less local development and (b)
+fast, portable tests of pure lifecycle logic that don't need a container. It
+is **never** selected in production: `best_available_provider()` chooses
+Docker whenever the daemon is reachable and falls back to the local provider
+only when it is not, and `/api/health` reports which one is active
+(`runtime.isolated: true/false`) so this is never silently invisible.
 
-**Docker is unavailable in the current environment.** The CLI is installed but
-the daemon is not running, so container isolation cannot presently be tested.
+**Docker and the real npm registry are both reachable in this development
+environment** (Docker Desktop 29.4.1, WSL2 backend), which is what made the
+Phase 4/5 real-isolation tests possible to write and run — not something
+assumed. A deployment without a reachable Docker daemon falls back to the
+unisolated local provider per the paragraph above; that fallback is
+documented, tested, and visible at `/api/health`, never silent.
 
-**The npm registry is unreachable** from the current environment, so dependency
-installation cannot be exercised at all. The zero-dependency starter exists to
-prove the build/run/preview loop without it.
+**`NetworkPolicy.INSTALL_ONLY` grants real, unrestricted outbound bridge
+networking for the duration of `npm install`.** It is not scoped to the npm
+registry specifically — no egress allowlist or proxy exists yet
+(`NetworkPolicy.ALLOWLIST` is declared in the model but raises
+`UNSUPPORTED_OPERATION` if selected). A malicious `postinstall` script could,
+during this one bounded window, reach any host the Docker bridge can route
+to, including a private/internal network reachable from the host. The
+container still cannot reach the trusted Redstone process's own filesystem or
+environment (those aren't network-addressable), and the window closes the
+moment install finishes — but this is a real, currently-unmitigated gap in
+that one phase, not a hidden one.
+
+**`RuntimeManager.reconcile()` only reconciles runtimes it still holds an
+in-memory record for.** A container orphaned by a full Redstone process
+restart (the in-memory `_runtimes`/`_workspace_active` registries are not
+persisted) is not automatically found and removed — there is no periodic
+sweep of `redstone-`-prefixed containers against nothing. In the current
+single-process, non-persistent Phase 5 scope this is a known gap, not a
+silent one: every *in-process* failure path (start failure, health-check
+failure, stop/kill/destroy, restart) does tear down its own sandbox, proven
+directly in `test_start_failure_leaves_no_orphaned_container` and
+`test_full_lifecycle_against_real_docker`'s before/after container count.
+
+**CPU limits are requested and applied, not independently stress-tested.**
+`--cpus` is set on every container exactly like `--memory` and
+`--pids-limit`, but unlike those two (driven to their limit and observed to
+trigger OOM-kill / fork failure respectively), no test drives a container to
+sustained 100% CPU and measures throttling. `SandboxStatus.enforced_limits`
+lists `cpu_cores` as enforced because Docker's cgroup CPU quota mechanism is
+well-established, not because Phase 4 independently measured it — a
+narrower claim than the memory/pids rows, stated as such rather than
+blurred together with them.
 
 **Hardlink/reparse defence is at the Redstone FS layer only.** `read_file`,
 `write_file`, `rename_file` and snapshots now refuse unsafe hardlinks and never
@@ -148,7 +195,9 @@ The agent (`redstone.agent`) is a bounded loop over the AI gateway and a fixed
 tool registry. It executes **no** project code: there is no `run_command`,
 `shell`, `exec`, `terminal`, `npm_install`, `curl`, or `wget` tool, and none
 can be added at runtime — the registry is a fixed dict built at import time.
-Full detail, including the exact fixtures, is in `docs/redstone/AGENT.md`.
+This did not change when Phase 4/5 gave Redstone a real sandbox and runtime
+manager: see #75 below. Full detail, including the exact fixtures, is in
+`docs/redstone/AGENT.md`.
 
 | # | Threat | Mitigation | Test |
 |---|---|---|---|
@@ -177,6 +226,55 @@ terminate a running thread); not currently exploitable, since every Phase 3
 tool is a bounded local filesystem operation. The HTTP API executes a task
 synchronously; there is no background queue yet.
 
+## Sandbox & runtime threat model (Phase 4/5)
+
+Every generated project — its source, its npm dependencies, their install
+scripts, and the dev server they start — is untrusted. Phase 4 builds the
+sandbox that runs it (`redstone.sandbox`); Phase 5 builds the RuntimeManager
+that owns its lifecycle (`redstone.runtime`). Full detail, including the
+provider-neutral abstraction and the empirical isolation evidence, is in
+`docs/redstone/SANDBOX.md` and `docs/redstone/RUNTIME.md`.
+
+| # | Threat | Mitigation | Test |
+|---|---|---|---|
+| 52 | **Malicious/arbitrary code execution from a generated project** | All project code runs only inside a Docker container: non-root (`--user 1000:1000`), every Linux capability dropped (`--cap-drop ALL`), `no-new-privileges`, its own PID namespace — never on the Redstone host. | `TestDockerProviderRealIsolation` (`test_runs_as_non_root`, `test_all_capabilities_are_dropped`), `test_dangerous_flags_never_appear_in_the_constructed_argv` |
+| 53 | **Malicious npm package / postinstall lifecycle script** | `npm install` runs only inside an ephemeral install sandbox, destroyed immediately after (`finally: provider.destroy()`), with the same non-root/no-caps/pids-limit posture as every other sandbox. | `test_real_npm_install_succeeds_over_install_only_network`, `RuntimeManager._run_install` |
+| 54 | **Filesystem traversal/symlink/hardlink/reparse from inside the sandbox** | The sandbox's one writable mount is the same Phase 2A.1-hardened `Workspace.project_root`; no new path-resolution logic exists in `sandbox`/`runtime` — `Mount` always points directly at the already-validated workspace path. Rows #1/#2/#2a–2c apply unchanged to whatever the mounted directory contains. | `test_filesystem_cannot_reach_outside_the_mount` |
+| 55 | **Host filesystem access from inside the sandbox** | `--read-only` root filesystem plus an explicit `tmpfs` allowlist (`/tmp` only, by default); the container's writable surface is exactly the one project mount and nothing else. | `test_root_filesystem_is_read_only` |
+| 56 | **Redstone/BYOK/provider API key leakage into the sandbox** | `SandboxConfig.environment` is the *complete* environment a sandbox receives; no line in `docker_provider.py` or `runtime/manager.py` reads `os.environ`, and `RuntimeManager` never has a reference to `AIConfig`. | `test_environment_contains_no_host_or_secret_variable`; `test_full_lifecycle_against_real_docker`'s `env_probe` (checked through `RuntimeManager`, not just the raw provider) |
+| 57 | **Docker socket access from inside the sandbox** | No bind mount of `docker.sock` exists anywhere in the codebase. | `test_dangerous_flags_never_appear_in_the_constructed_argv` (asserts `"docker.sock"` never appears in constructed argv) |
+| 58 | **Privileged container / host namespaces** (`--privileged`, `--network host`, `--pid host`, `--ipc host`) | None of these flags are ever constructed, for any config. | `test_dangerous_flags_never_appear_in_the_constructed_argv` |
+| 59 | **Localhost / internal-service SSRF once the dev server is running** | `NetworkPolicy.DENY` (`--network none`) is the default and only policy used for the long-running dev server sandbox — it has no network device at all. | `test_network_deny_blocks_outbound`, `test_full_lifecycle_against_real_docker`'s `network_probe` |
+| 60 | **Cloud metadata endpoint access** (`169.254.169.254`) | Same mechanism as #59: with no network device, the metadata address is unreachable exactly like every other address. Not separately reproduced against a real metadata service (this environment isn't a cloud host); inferred from the same `--network none` primitive verified generally. | — (mechanism shared with #59, not independently reproduced) |
+| 61 | **Private-network (internal) access during dependency install** | ⚠️ **Partially mitigated — see Known risks.** `NetworkPolicy.INSTALL_ONLY` is real outbound bridge networking, not scoped to the npm registry; no egress allowlist exists yet. | — |
+| 62 | **Fork bomb / unbounded process creation** | `--pids-limit` is a kernel-enforced cgroup ceiling, driven to its limit and observed to actually block forking. | `test_pids_limit_bounds_a_fork_bomb` |
+| 63 | **Memory exhaustion** | `--memory` triggers a real kernel OOM-kill, observed directly. | `test_memory_limit_is_enforced` |
+| 64 | **CPU exhaustion** | ⚠️ Requested and applied (`--cpus`) on every container; not independently stress-tested to observe throttling the way memory/pids were driven to failure — see Known risks. | — |
+| 65 | **Output flooding** (dev server or install logging unboundedly) | Docker's own log file is bounded (`--log-opt max-size`/`max-file`); `DockerSandboxProvider._read_bounded` additionally stops reading and closes Redstone's own local reader past `max_bytes`, so the trusted process never buffers unbounded output regardless of what the log driver retains. | `test_logs_are_bounded` |
+| 66 | **Infinite / hung process** (install or dev server never exiting or never becoming healthy) | `wait()` enforces a hard timeout and kills the *entire* process tree via Docker's own PID-namespace teardown — proven against a real parent→child→grandchild tree, not assumed. `RuntimeManager`'s own startup loop is separately bounded by `max_startup_seconds`. | `test_timeout_terminates_the_entire_process_tree`, `test_start_fails_when_the_dev_server_never_becomes_healthy` |
+| 67 | **Orphaned containers after a crash or failed operation** | Every `RuntimeManager` failure path (start/health-check failure, stop, kill, destroy, restart) tears its own sandbox down before returning or re-raising; `reconcile()` catches runtimes whose sandbox no longer matches recorded state. ⚠️ Does not sweep containers orphaned by a full Redstone process restart — see Known risks. | `test_start_failure_leaves_no_orphaned_container`, `test_restart_leaves_no_orphaned_sandbox_from_the_old_generation`, `test_full_lifecycle_against_real_docker` (before/after container count) |
+| 68 | **Concurrent-runtime races** (start+stop, start+restart, restart+destroy, simultaneous starts/destroys) | A per-runtime-id operation lock serialises every mutating call; a separate per-workspace admission slot (checked-and-set atomically) enforces one active runtime per workspace. | `test_simultaneous_creates_for_the_same_workspace_only_one_wins`, `test_start_and_stop_race_leaves_a_consistent_terminal_state` (10 iterations), `test_simultaneous_destroys_are_all_safe`, `test_restart_and_destroy_race_never_leaves_two_active_generations` |
+| 69 | **Stale/forged runtime ownership** (a caller supplying another project's runtime_id) | Every `RuntimeManager` method checks the caller's `project_id` against the `Runtime` record's own `project_id`, set once at `create()` time from trusted server state — never trusts a caller-supplied id alone. The API layer never accepts a `workspace_id` or `runtime_id` payload field either; it resolves the current runtime for a project server-side. | `test_operations_reject_the_wrong_project_id`, `test_destroy_rejects_the_wrong_project_id` |
+| 70 | **Port collision / arbitrary host port exposure** | No `-p`/`--publish` flag is ever constructed; the dev server is reached only via `docker exec` health probes inside the container's own namespace, never a host-bound port. | `test_dangerous_flags_never_appear_in_the_constructed_argv`, `test_network_deny_blocks_outbound` |
+| 71 | **Runtime crash while RUNNING** | `health_check()` distinguishes "sandbox process exists" from "server actually responding" and transitions to `FAILED` with bounded diagnostics on either signal. | `test_health_check_detects_a_crashed_sandbox`, `test_health_check_detects_a_real_container_crash` (real Docker), `test_reconcile_marks_orphaned_crashes_as_failed` |
+| 72 | **Cleanup failure leaving a runtime record inconsistent with reality** | `destroy()` always attempts the (itself idempotent) `provider.destroy()` before marking the record `DESTROYED`, and is itself idempotent against a record already in a terminal state. | `test_destroy_is_idempotent`, `test_simultaneous_destroys_are_all_safe` |
+| 73 | **Restart leaving the workspace slot ambiguously or doubly held** | `restart()` destroys the old generation, re-verifies the slot was actually released (guarding a concurrent `create()` winning the race), then creates+starts a new generation; any failure during the new `start()` leaves it `FAILED` with its slot released, never "ambiguously running". | `test_restart_and_destroy_race_never_leaves_two_active_generations`, `test_restart_of_a_failed_runtime_recovers_cleanly` |
+| 74 | **Cross-project/cross-workspace access via the runtime layer** | Same ownership check as #69, plus #45's pattern: a `Workspace` reaches `RuntimeManager` only via `AgentService.get_workspace(project_id)` — no endpoint or tool accepts a workspace id directly. | `test_create_for_a_different_workspace_succeeds` (isolation), `test_operations_reject_the_wrong_project_id` |
+| 75 | **The coding agent gaining direct execution power now that a runtime exists** | No `shell`/`exec`/`bash`/`powershell`/`python_exec`/`arbitrary_command` tool was added to `ToolRegistry`. `run_typecheck`/`run_lint`/`run_build` still only select one of a fixed `Operation` enum resolved through `SandboxCommand`'s static table — there is no code path from agent output to an arbitrary command, inside the sandbox or out of it. | `test_no_shell_or_exec_tool_is_registered` (Phase 3, unchanged); `SandboxValidationRunner` takes an `Operation`, never a string, from its only two call sites |
+| 76 | **Fabricated validation success now that real sandboxed execution exists** | `SandboxValidationRunner` reports `PASSED` only when the sandboxed process actually exits 0; `FAILED` on nonzero exit or timeout; `UNAVAILABLE` (never a fabricated `PASSED`) if the provider itself can't be reached. | `test_typecheck_fails_when_the_sandbox_exits_nonzero`, `test_lint_reports_failed_on_timeout_not_a_fabricated_pass`, `test_provider_unavailable_is_reported_not_raised`, `test_typecheck_fails_honestly_when_tsc_is_not_installed` (real Docker) |
+
+**Sandbox/runtime known limits** are listed inline above (rows #61, #64, #67)
+and in *Known risks, stated plainly* above (`LocalProcessSandboxProvider`'s
+lack of isolation, the `INSTALL_ONLY` egress scope, the `reconcile()` sweep
+gap, the CPU-throttling test gap). None of Phase 4/5's real container
+isolation claims (non-root, dropped capabilities, pids/memory limits,
+network policy, full process-tree termination on timeout) are asserted
+without a test that drives the actual mechanism to its limit and observes
+the real kernel/Docker behavior — the one deliberate exception is #60
+(cloud metadata), where the underlying mechanism (`--network none`) is
+proven generally but not reproduced against a literal metadata endpoint in
+this development environment.
+
 ## Verifying the boundary
 
 ```bash
@@ -185,14 +283,25 @@ python -m pytest tests/redstone/test_hardening.py -q       # 2A.1 vulnerability 
 python -m pytest tests/redstone/test_ai_gateway.py -q       # AI gateway + credential safety
 python -m pytest tests/redstone/test_agent_tools.py -q      # agent tools against the REAL security boundary
 python -m pytest tests/redstone/test_agent_prompt_injection.py -q
-python -m pytest tests/redstone/ -q                        # full foundation suite
+python -m pytest tests/redstone/test_sandbox.py -q                       # real Docker isolation (skips cleanly if no daemon)
+python -m pytest tests/redstone/test_runtime.py -q                       # RuntimeManager lifecycle/ownership/races (fake provider)
+python -m pytest tests/redstone/test_runtime_docker_integration.py -q    # RuntimeManager against a real container
+python -m pytest tests/redstone/test_sandbox_validation.py -q            # run_typecheck/lint/build through the sandbox
+python -m pytest tests/redstone/ -q                        # full suite
 
-# The deterministic core (everything except api/ and ai/providers/) must never
-# execute anything or import a web framework:
-grep -rnE "subprocess|shell=True|eval\(|exec\(|os\.system" src/redstone/
+# The deterministic core (everything except api/, ai/providers/, and
+# sandbox/providers/ -- the one place a real subprocess call belongs) must
+# never actually execute anything or import a web framework. Matches
+# subprocess.run/Popen/call/check_*, shell=True, eval(, os.system -- not
+# docstring prose that merely mentions "subprocess" in passing:
+grep -rnE "subprocess\.(run|Popen|call|check_)|shell=True|eval\(|os\.system" src/redstone/ --include="*.py" \
+  | grep -vE '^src/redstone/(sandbox/providers|ai/providers)/'
 grep -rlnE "^\s*(import|from)\s+(fastapi|pydantic)" src/redstone/ | grep -v '^src/redstone/api/'
 # httpx is used ONLY by ai/providers, and only lazily inside post_json:
 grep -rn "import httpx" src/redstone/   # -> src/redstone/ai/providers/base.py
+# subprocess is used ONLY by sandbox/providers, always as an argv list,
+# never with shell=True and never string-formatted from external input:
+grep -rn "subprocess\." src/redstone/sandbox/providers/ | grep "shell=True"   # -> no matches
 ```
 
 ## Reporting
