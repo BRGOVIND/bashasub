@@ -58,6 +58,15 @@ class Limits:
     max_tool_argument_size: int = 64 * 1024        # a single string tool argument
     max_search_results: int = 50                   # agent-facing cap, below the raw tool's own
 
+    # Sandbox / runtime (Phase 4/5).
+    sandbox_cpu_cores: float = 1.0
+    sandbox_memory_mb: int = 512
+    sandbox_pids: int = 128
+    sandbox_output_bytes: int = 256 * 1024
+    max_runtime_startup_seconds: float = 60.0      # install + start + first healthy check
+    runtime_health_check_timeout_seconds: float = 5.0
+    runtime_stop_grace_seconds: float = 10.0
+
     @classmethod
     def from_env(cls) -> Limits:
         # slots=True makes cls.<field> a member descriptor rather than the

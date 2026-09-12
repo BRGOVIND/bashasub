@@ -63,6 +63,8 @@ class RuntimeState(str, Enum):
     STOPPING = "stopping"
     STOPPED = "stopped"
     FAILED = "failed"
+    KILLED = "killed"
+    DESTROYED = "destroyed"
     EXPIRED = "expired"
 
 
@@ -86,9 +88,18 @@ class EventType(str, Enum):
     FILE_CHANGED = "file.changed"
     BUILD_STARTED = "build.started"
     BUILD_COMPLETED = "build.completed"
+    RUNTIME_CREATED = "runtime.created"
+    RUNTIME_STARTING = "runtime.starting"
     RUNTIME_STARTED = "runtime.started"
+    RUNTIME_HEALTH_CHECK = "runtime.health_check"
+    RUNTIME_OUTPUT = "runtime.output"
+    RUNTIME_CRASHED = "runtime.crashed"
+    RUNTIME_STOPPING = "runtime.stopping"
     RUNTIME_STOPPED = "runtime.stopped"
+    RUNTIME_KILLED = "runtime.killed"
+    RUNTIME_DESTROYED = "runtime.destroyed"
     RUNTIME_ERROR = "runtime.error"
+    RUNTIME_FAILED = "runtime.failed"
     PREVIEW_STARTED = "preview.started"
     PREVIEW_READY = "preview.ready"
     PREVIEW_FAILED = "preview.failed"
@@ -183,15 +194,48 @@ class Snapshot:
 
 @dataclass(frozen=True, slots=True)
 class Runtime:
+    """A dev-server lifecycle managed by RuntimeManager.
+
+    `sandbox_id` and `provider_name` are internal (which low-level sandbox
+    execution currently backs this runtime); a public API view must never
+    include them -- see Runtime.to_dict().
+    """
+
     id: str
     project_id: str
+    workspace_id: str = ""
+    framework: Framework = Framework.REACT_VITE_TS
     state: RuntimeState = RuntimeState.CREATED
     port: int | None = None
+    sandbox_id: str | None = None
+    provider_name: str | None = None
+    last_error: dict | None = None
     created_at: datetime = field(default_factory=utcnow)
     last_activity: datetime = field(default_factory=utcnow)
 
     def with_state(self, state: RuntimeState) -> Runtime:
         return replace(self, state=state, last_activity=utcnow())
+
+    def with_sandbox(self, sandbox_id: str | None, provider_name: str | None) -> Runtime:
+        return replace(self, sandbox_id=sandbox_id, provider_name=provider_name,
+                      last_activity=utcnow())
+
+    def with_error(self, error_code: str, message: str) -> Runtime:
+        return replace(self, last_error={"error_code": error_code, "message": message},
+                      last_activity=utcnow())
+
+    def to_dict(self) -> dict:
+        """The safe, public-facing view. No sandbox_id, no provider_name, no
+        host path, no container ID -- exactly the fields an API caller needs."""
+        return {
+            "runtime_id": self.id,
+            "project_id": self.project_id,
+            "state": self.state.value,
+            "framework": self.framework.value,
+            "last_error": self.last_error,
+            "created_at": self.created_at.isoformat(),
+            "last_activity": self.last_activity.isoformat(),
+        }
 
 
 @dataclass(frozen=True, slots=True)

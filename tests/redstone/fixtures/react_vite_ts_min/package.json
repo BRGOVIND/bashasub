@@ -1,0 +1,11 @@
+{
+  "name": "redstone-runtime-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "node server.js",
+    "build": "echo build-ok",
+    "typecheck": "echo typecheck-ok",
+    "lint": "echo lint-ok"
+  }
+}
