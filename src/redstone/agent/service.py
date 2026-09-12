@@ -22,7 +22,7 @@ from ..changes.snapshots import SnapshotStore
 from ..config import RedstoneConfig
 from ..domain.models import EventType, Framework, Project, ProjectStatus
 from ..events.bus import Event, EventBus
-from ..workspace.manager import WorkspaceManager
+from ..workspace.manager import Workspace, WorkspaceManager
 from .errors import AgentErrorCode, RedstoneAgentError
 from .loop import run_agent_task
 from .models import AgentStatus, AgentTask
@@ -91,6 +91,15 @@ class AgentService:
         if project is None:
             raise RedstoneAgentError(AgentErrorCode.PROJECT_NOT_FOUND)
         return project
+
+    def get_workspace(self, project_id: str) -> Workspace:
+        """Resolve a project to its real Workspace. The one place outside
+        this class allowed to reach a project's filesystem -- RuntimeManager
+        needs the actual Workspace (not just its id) to mount the project
+        directory, and must never be handed a workspace_id a caller supplied
+        directly."""
+        project = self.get_project(project_id)
+        return self._workspaces.get(project.workspace_id)
 
     # ------------------------------------------------------------- leases
 
