@@ -12,33 +12,49 @@ of caller-supplied config:
   * --cap-drop ALL                    -- no Linux capabilities at all
   * --pids-limit                      -- bounds fork bombs
   * a fixed non-root --user           -- never the identity Redstone itself runs as
+  * a redstone.managed=true label     -- ownership marker for orphan recovery
   * no --privileged, ever
   * no --network host, ever
   * no --pid host / --ipc host, ever
+  * no --device, ever
+  * no port publishing (-p/--publish), ever
   * no Docker socket mount, ever
 
 These are asserted by a static test that inspects the constructed argv
-directly (test_sandbox_docker.py::test_dangerous_flags_never_appear), not just
+directly (test_dangerous_flags_never_appear_in_the_constructed_argv), not just
 described here.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import threading
 import time
 import uuid
+from pathlib import Path
 
 from ..errors import RedstoneSandboxError, SandboxErrorCode
 from ..models import Mount, NetworkPolicy, SandboxConfig, SandboxResult, SandboxState, SandboxStatus
 
-__all__ = ["DockerSandboxProvider", "docker_available"]
+__all__ = ["DockerSandboxProvider", "docker_available", "MANAGED_LABEL", "DEFAULT_IMAGE"]
 
-# Pinned to a tag rather than a digest for Phase 4; production deployment
-# should pin an exact digest for reproducibility. Documented, not hidden.
-DEFAULT_IMAGE = "node:20-alpine"
+# Digest-pinned (Phase 4.1). The digest is the one `node:20-alpine` resolved
+# to on this daemon at hardening time; a tag can be repointed upstream, a
+# digest cannot. Rotating it is a deliberate, reviewed change to this line --
+# never something a project, an API caller or the agent can select.
+DEFAULT_IMAGE = (
+    "node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293"
+)
 
 _CONTAINER_PROJECT_PATH = "/workspace/project"
+
+# Every container this provider creates carries this label, unconditionally.
+# Orphan reconciliation filters on it at the Docker CLI level, so a container
+# without it can never even appear in list_managed() -- let alone be touched.
+MANAGED_LABEL = "redstone.managed"
+_LABEL_PREFIX = "redstone."
 
 # The complete environment every sandbox gets, before SandboxConfig.environment
 # is merged in on top. Notably absent: anything from os.environ. There is no
@@ -48,6 +64,9 @@ _BASE_ENV = {
     "npm_config_cache": "/tmp/.npm-cache",
     "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 }
+
+# Upper bound on how long reading a finished container's logs may take.
+_LOG_READ_TIMEOUT_SECONDS = 15.0
 
 
 def docker_available() -> bool:
@@ -75,11 +94,18 @@ def _run_docker(argv: list[str], *, timeout: float | None = None) -> subprocess.
         raise RedstoneSandboxError(SandboxErrorCode.TIMEOUT)
 
 
+def _trim_tail(text: str, max_bytes: int) -> str:
+    encoded = text.encode("utf-8", "ignore")
+    if len(encoded) <= max_bytes:
+        return text
+    return encoded[-max_bytes:].decode("utf-8", "ignore")
+
+
 def _read_bounded(argv: list[str], max_bytes: int, timeout: float | None) -> tuple[str, bool]:
-    """Run a docker CLI command and read stdout incrementally, stopping (and
-    killing our local reader, not the remote process) the moment max_bytes is
-    exceeded -- so a runaway sandbox cannot make Redstone itself buffer an
-    unbounded string in memory."""
+    """Run a docker CLI command and read its merged stdout+stderr
+    incrementally, stopping (and killing our local reader, not the remote
+    process) the moment max_bytes is exceeded -- so a runaway sandbox cannot
+    make Redstone itself buffer an unbounded string in memory."""
     try:
         process = subprocess.Popen(
             ["docker", *argv], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -98,7 +124,7 @@ def _read_bounded(argv: list[str], max_bytes: int, timeout: float | None) -> tup
         for line in process.stdout:
             chunks.append(line)
             total += len(line.encode("utf-8", "ignore"))
-            if total >= max_bytes:
+            if total > max_bytes:
                 truncated = True
                 break
             if deadline and time.monotonic() > deadline:
@@ -112,42 +138,155 @@ def _read_bounded(argv: list[str], max_bytes: int, timeout: float | None) -> tup
         except subprocess.TimeoutExpired:
             process.kill()
 
-    return "".join(chunks), truncated
+    return _trim_tail("".join(chunks), max_bytes), truncated
+
+
+class _BoundedSink:
+    """Accumulates one stream up to max_bytes, keeps counting (so truncation
+    is reported exactly) but stops retaining text past the ceiling."""
+
+    def __init__(self, max_bytes: int) -> None:
+        self.max_bytes = max_bytes
+        self.kept: list[str] = []
+        self.kept_bytes = 0
+        self.seen_bytes = 0
+
+    def feed(self, line: str) -> None:
+        size = len(line.encode("utf-8", "ignore"))
+        self.seen_bytes += size
+        if self.kept_bytes >= self.max_bytes:
+            return
+        self.kept.append(line)
+        self.kept_bytes += size
+
+    @property
+    def truncated(self) -> bool:
+        return self.seen_bytes > self.max_bytes
+
+    def text(self) -> str:
+        # Keep the head: for install/build diagnostics the first error is the
+        # useful one, and a flood is usually a repeat of it.
+        encoded = "".join(self.kept).encode("utf-8", "ignore")[: self.max_bytes]
+        return encoded.decode("utf-8", "ignore")
+
+
+def _read_bounded_split(
+    argv: list[str], max_bytes: int, timeout: float,
+) -> tuple[str, bool, str, bool, int | None, bool]:
+    """Run a docker CLI command with GENUINELY separate stdout/stderr pipes.
+
+    `docker logs` reproduces each container stream on the matching CLI
+    stream (verified against this daemon), so reading two pipes yields the
+    container's real stdout and stderr, not an interleaved blob. Both pipes
+    are drained concurrently to completion -- a reader that stopped draining
+    one pipe could deadlock the CLI on a full pipe buffer -- while each
+    sink independently stops RETAINING text past max_bytes. Memory held by
+    Redstone is therefore bounded by 2 * max_bytes regardless of how much the
+    sandbox wrote.
+    """
+    try:
+        process = subprocess.Popen(
+            ["docker", *argv], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            errors="replace",
+        )
+    except FileNotFoundError:
+        raise RedstoneSandboxError(SandboxErrorCode.PROVIDER_UNAVAILABLE)
+
+    out_sink = _BoundedSink(max_bytes)
+    err_sink = _BoundedSink(max_bytes)
+
+    def _drain(stream, sink: _BoundedSink) -> None:
+        try:
+            for line in stream:
+                sink.feed(line)
+        except (ValueError, OSError):
+            pass
+
+    readers = [
+        threading.Thread(target=_drain, args=(process.stdout, out_sink), daemon=True),
+        threading.Thread(target=_drain, args=(process.stderr, err_sink), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+
+    timed_out = False
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        process.kill()
+        process.wait(timeout=5)
+    finally:
+        for reader in readers:
+            reader.join(timeout=5)
+        for stream in (process.stdout, process.stderr):
+            if stream:
+                stream.close()
+
+    exit_code = None if timed_out else process.returncode
+    return (out_sink.text(), out_sink.truncated, err_sink.text(), err_sink.truncated,
+            exit_code, timed_out)
+
+
+def _directory_size(root: Path) -> int:
+    """Bytes actually on disk under `root`, never following links (a link
+    planted by the sandbox must not make us measure -- or walk into --
+    anything outside the mount)."""
+    total = 0
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        for name in filenames:
+            try:
+                total += os.lstat(os.path.join(dirpath, name)).st_size
+            except OSError:
+                continue
+    return total
 
 
 class DockerSandboxProvider:
     name = "docker"
     is_isolated = True   # real namespace/cgroup isolation; see module docstring
 
-    def __init__(self, image: str = DEFAULT_IMAGE) -> None:
+    def __init__(self, image: str = DEFAULT_IMAGE, *, storage_poll_interval: float = 1.0) -> None:
         self._image = image
+        self._storage_poll_interval = storage_poll_interval
+        # Docker remembers the container; it does not remember OUR config.
+        # These are the few per-sandbox facts later calls need (output
+        # ceiling, storage ceiling + what to measure, watchdog handle).
+        self._lock = threading.Lock()
+        self._sandboxes: dict[str, dict] = {}
 
     # ------------------------------------------------------------- create
 
     def create(self, config: SandboxConfig) -> str:
         sandbox_id = f"redstone-{uuid.uuid4().hex[:16]}"
+        limits = config.resource_limits
 
         argv = [
             "create",
             "--name", sandbox_id,
             "--security-opt", "no-new-privileges",
             "--cap-drop", "ALL",
-            "--pids-limit", str(config.resource_limits.pids),
-            "--memory", f"{config.resource_limits.memory_mb}m",
-            "--cpus", str(config.resource_limits.cpu_cores),
+            "--pids-limit", str(limits.pids),
+            "--memory", f"{limits.memory_mb}m",
+            "--memory-swap", f"{limits.memory_mb}m",   # no swap headroom past --memory
+            "--cpus", str(limits.cpu_cores),
             "--log-driver", "json-file",
-            "--log-opt", f"max-size={max(1, config.resource_limits.output_bytes // (1024 * 1024))}m",
+            "--log-opt", f"max-size={max(1, limits.output_bytes // (1024 * 1024))}m",
             "--log-opt", "max-file=1",
             "--user", config.user or "1000:1000",
             "--workdir", config.working_dir,
+            "--label", f"{MANAGED_LABEL}=true",
         ]
+
+        for key, value in config.labels.items():
+            argv.extend(["--label", self._label_arg(key, value)])
 
         if config.read_only_root:
             argv.append("--read-only")
         for tmp_path in config.tmpfs_paths:
-            argv.extend(["--tmpfs", tmp_path])
-
-        argv.extend(self._network_args(config))
+            # Bounded tmpfs: without size= Docker would allow up to half of
+            # host RAM, which is a second, uncounted storage channel.
+            argv.extend(["--tmpfs", f"{tmp_path}:rw,size={limits.storage_mb}m,mode=1777"])
 
         for mount in config.mounts:
             argv.extend(["--mount", self._mount_arg(mount)])
@@ -157,30 +296,95 @@ class DockerSandboxProvider:
         for key, value in environment.items():
             argv.extend(["--env", f"{key}={value}"])
 
+        # Resolve the command before creating any Docker resource, so an
+        # unsupported operation cannot leave a network behind.
+        command_argv = list(config.command.resolve())
+        network_args = self._network_args(config, sandbox_id)
+        argv.extend(network_args)
         argv.append(self._image)
-        argv.extend(config.command.resolve())
+        argv.extend(command_argv)
 
-        result = _run_docker(argv, timeout=30)
+        try:
+            result = _run_docker(argv, timeout=30)
+        except RedstoneSandboxError:
+            self._remove_network(sandbox_id)
+            raise
         if result.returncode != 0:
+            self._remove_network(sandbox_id)
             raise RedstoneSandboxError(
                 SandboxErrorCode.CREATE_FAILED,
                 internal=f"docker create exit={result.returncode} stderr={result.stderr[:500]}",
             )
+
+        with self._lock:
+            self._sandboxes[sandbox_id] = {
+                "output_bytes": limits.output_bytes,
+                "storage_mb": limits.storage_mb,
+                "watch_paths": tuple(m.host_path for m in config.mounts if not m.read_only),
+                "stop_event": None,
+                "limit_exceeded": None,
+            }
         return sandbox_id
 
-    def _network_args(self, config: SandboxConfig) -> list[str]:
+    @staticmethod
+    def _label_arg(key: str, value: str) -> str:
+        # Labels are ownership metadata, not a free-form channel: only
+        # Redstone-namespaced keys, only printable single-line values.
+        if not key.startswith(_LABEL_PREFIX) or key == MANAGED_LABEL:
+            raise RedstoneSandboxError(
+                SandboxErrorCode.INVALID_CONFIG, safe_message="Invalid sandbox label."
+            )
+        if not value.isprintable() or len(value) > 128:
+            raise RedstoneSandboxError(
+                SandboxErrorCode.INVALID_CONFIG, safe_message="Invalid sandbox label value."
+            )
+        return f"{key}={value}"
+
+    @staticmethod
+    def _network_name(sandbox_id: str) -> str:
+        # Derived, not stored: after a Redstone restart destroy() can still
+        # find and remove the network of an orphaned sandbox.
+        return f"{sandbox_id}-net"
+
+    def _network_args(self, config: SandboxConfig, sandbox_id: str) -> list[str]:
         if config.network_policy is NetworkPolicy.DENY:
             return ["--network", "none"]
         if config.network_policy is NetworkPolicy.INSTALL_ONLY:
-            # Default bridge: outbound reaches the internet; nothing is
-            # published, so nothing on the host or another container can
-            # reach IN. This is the one place a sandbox gets real egress,
-            # and it is used only for the dependency-install operation.
-            return ["--network", "bridge"]
+            # A dedicated bridge network per install sandbox, never Docker's
+            # shared default `bridge`. ENFORCED: this container cannot reach
+            # any other container on the machine (Redstone's own or the
+            # user's -- e.g. a local database on the default bridge), and
+            # nothing is published, so nothing can reach IN.
+            # NOT ENFORCED: outbound internet egress is NOT restricted to the
+            # npm registry, and the network's gateway (the host) is routable.
+            # Registry-only egress needs an egress proxy, which does not
+            # exist yet -- a documented gap (SECURITY.md), not a safety claim.
+            name = self._network_name(sandbox_id)
+            result = _run_docker(
+                ["network", "create", "--driver", "bridge",
+                 "--label", f"{MANAGED_LABEL}=true",
+                 "--opt", "com.docker.network.bridge.enable_icc=false",
+                 name],
+                timeout=30,
+            )
+            if result.returncode != 0:
+                raise RedstoneSandboxError(
+                    SandboxErrorCode.CREATE_FAILED,
+                    safe_message="The sandbox network could not be created.",
+                    internal=result.stderr[:500],
+                )
+            return ["--network", name]
         raise RedstoneSandboxError(
             SandboxErrorCode.UNSUPPORTED_OPERATION,
             safe_message=f"network policy '{config.network_policy.value}' is not implemented",
         )
+
+    def _remove_network(self, sandbox_id: str) -> None:
+        # Idempotent: most sandboxes (DENY) never had one.
+        try:
+            _run_docker(["network", "rm", self._network_name(sandbox_id)], timeout=30)
+        except RedstoneSandboxError:
+            pass
 
     @staticmethod
     def _mount_arg(mount: Mount) -> str:
@@ -201,6 +405,62 @@ class DockerSandboxProvider:
                 SandboxErrorCode.START_FAILED,
                 internal=f"docker start exit={result.returncode} stderr={result.stderr[:500]}",
             )
+        self._start_storage_watchdog(sandbox_id)
+
+    # --------------------------------------------------- storage watchdog
+
+    def _start_storage_watchdog(self, sandbox_id: str) -> None:
+        with self._lock:
+            info = self._sandboxes.get(sandbox_id)
+            if info is None or not info["watch_paths"] or info["storage_mb"] <= 0:
+                return
+            if info["stop_event"] is not None:
+                return
+            stop_event = threading.Event()
+            info["stop_event"] = stop_event
+            watch_paths = info["watch_paths"]
+            limit_bytes = info["storage_mb"] * 1024 * 1024
+
+        thread = threading.Thread(
+            target=self._watch_storage,
+            args=(sandbox_id, watch_paths, limit_bytes, stop_event),
+            name=f"storage-watchdog-{sandbox_id}",
+            daemon=True,
+        )
+        thread.start()
+
+    def _watch_storage(self, sandbox_id: str, watch_paths, limit_bytes: int,
+                       stop_event: threading.Event) -> None:
+        while not stop_event.wait(self._storage_poll_interval):
+            used = sum(_directory_size(Path(p)) for p in watch_paths)
+            if used <= limit_bytes:
+                continue
+            with self._lock:
+                info = self._sandboxes.get(sandbox_id)
+                if info is not None:
+                    info["limit_exceeded"] = "storage_mb"
+            try:
+                self.kill(sandbox_id)
+            except RedstoneSandboxError:
+                pass
+            return
+
+    def _stop_watchdog(self, sandbox_id: str) -> None:
+        with self._lock:
+            info = self._sandboxes.get(sandbox_id)
+            event = info.get("stop_event") if info else None
+        if event is not None:
+            event.set()
+
+    def _limit_exceeded(self, sandbox_id: str) -> str | None:
+        with self._lock:
+            info = self._sandboxes.get(sandbox_id)
+            return info.get("limit_exceeded") if info else None
+
+    def _output_bytes(self, sandbox_id: str) -> int:
+        with self._lock:
+            info = self._sandboxes.get(sandbox_id)
+            return info["output_bytes"] if info else 256 * 1024
 
     # --------------------------------------------------------------- wait
 
@@ -212,7 +472,8 @@ class DockerSandboxProvider:
                 capture_output=True, text=True, timeout=timeout,
             )
             timed_out = False
-            exit_code = int(wait_result.stdout.strip()) if wait_result.stdout.strip().isdigit() else None
+            raw = wait_result.stdout.strip()
+            exit_code = int(raw) if raw.lstrip("-").isdigit() else None
         except subprocess.TimeoutExpired:
             timed_out = True
             exit_code = None
@@ -221,39 +482,35 @@ class DockerSandboxProvider:
             # the container's own cgroup/PID namespace, which the kernel
             # tears down completely -- every descendant goes with it, not
             # just the top-level process. Verified directly in
-            # test_process_tree_is_fully_terminated_on_timeout.
+            # test_timeout_terminates_the_entire_process_tree.
             self.kill(sandbox_id)
 
+        self._stop_watchdog(sandbox_id)
         duration = time.monotonic() - started
-        logs, truncated = self.logs(sandbox_id, max_bytes=256 * 1024), False
+        stdout, out_truncated, stderr, err_truncated, _code, _log_timeout = _read_bounded_split(
+            ["logs", sandbox_id], self._output_bytes(sandbox_id), _LOG_READ_TIMEOUT_SECONDS,
+        )
         return SandboxResult(
-            exit_code=exit_code, stdout=logs, stderr="",
-            truncated=truncated, timed_out=timed_out, duration_seconds=duration,
+            exit_code=exit_code, stdout=stdout, stderr=stderr,
+            truncated=out_truncated or err_truncated,
+            timed_out=timed_out, duration_seconds=duration,
+            resource_limit_exceeded=self._limit_exceeded(sandbox_id),
         )
 
     # ------------------------------------------------------------- exec_in
 
     def exec_in(self, sandbox_id: str, argv: tuple[str, ...], timeout: float) -> SandboxResult:
         started = time.monotonic()
-        try:
-            result = subprocess.run(
-                ["docker", "exec", sandbox_id, *argv],
-                capture_output=True, text=True, timeout=timeout,
-            )
-            return SandboxResult(
-                exit_code=result.returncode,
-                stdout=result.stdout[-8192:], stderr=result.stderr[-8192:],
-                truncated=len(result.stdout) > 8192 or len(result.stderr) > 8192,
-                timed_out=False, duration_seconds=time.monotonic() - started,
-            )
-        except subprocess.TimeoutExpired:
-            return SandboxResult(
-                exit_code=None, stdout="", stderr="",
-                truncated=False, timed_out=True,
-                duration_seconds=time.monotonic() - started,
-            )
-        except FileNotFoundError:
-            raise RedstoneSandboxError(SandboxErrorCode.PROVIDER_UNAVAILABLE)
+        stdout, out_t, stderr, err_t, exit_code, timed_out = _read_bounded_split(
+            ["exec", sandbox_id, *argv], 8192, timeout,
+        )
+        # An exec that outlived its timeout is reported as timed out with no
+        # exit code -- never as success.
+        return SandboxResult(
+            exit_code=exit_code, stdout=stdout, stderr=stderr,
+            truncated=out_t or err_t, timed_out=timed_out,
+            duration_seconds=time.monotonic() - started,
+        )
 
     # ------------------------------------------------------------- status
 
@@ -273,7 +530,10 @@ class DockerSandboxProvider:
             sandbox_id=sandbox_id,
             state=state,
             exit_code=state_info.get("ExitCode") if not state_info.get("Running") else None,
-            enforced_limits=("cpu_cores", "memory_mb", "pids"),
+            enforced_limits=("cpu_cores", "memory_mb", "pids", "timeout_seconds",
+                             "output_bytes", "storage_mb"),
+            resource_limit_exceeded=self._limit_exceeded(sandbox_id)
+            or ("memory_mb" if state_info.get("OOMKilled") else None),
         )
 
     @staticmethod
@@ -289,15 +549,59 @@ class DockerSandboxProvider:
     # --------------------------------------------------------------- logs
 
     def logs(self, sandbox_id: str, max_bytes: int) -> str:
-        text, _truncated = _read_bounded(["logs", sandbox_id], max_bytes, timeout=15)
-        encoded = text.encode("utf-8", "ignore")
-        if len(encoded) > max_bytes:
-            return encoded[-max_bytes:].decode("utf-8", "ignore")
+        """Merged, chronologically interleaved output for human diagnosis.
+        Structured callers that need separate streams and an exact
+        truncation flag use wait()'s SandboxResult instead."""
+        text, _truncated = _read_bounded(["logs", sandbox_id], max_bytes,
+                                         timeout=_LOG_READ_TIMEOUT_SECONDS)
         return text
+
+    # ------------------------------------------------------ list_managed
+
+    def list_managed(self) -> tuple[dict, ...]:
+        """Every container carrying redstone.managed=true, found by asking
+        Docker itself -- never from this object's own memory. The label
+        filter is applied by the Docker CLI, so an unlabelled container
+        cannot appear here at all."""
+        result = _run_docker(
+            ["ps", "-a", "--filter", f"label={MANAGED_LABEL}=true", "--format", "{{.Names}}"],
+            timeout=15,
+        )
+        if result.returncode != 0:
+            raise RedstoneSandboxError(
+                SandboxErrorCode.PROVIDER_UNAVAILABLE, internal=result.stderr[:500]
+            )
+        names = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        if not names:
+            return ()
+
+        inspected = _run_docker(["inspect", *names], timeout=30)
+        if inspected.returncode != 0:
+            # A container vanished between ps and inspect; retry one by one.
+            entries = []
+            for name in names:
+                single = _run_docker(["inspect", name], timeout=15)
+                if single.returncode == 0:
+                    entries.extend(json.loads(single.stdout))
+        else:
+            entries = json.loads(inspected.stdout)
+
+        managed = []
+        for entry in entries:
+            labels = (entry.get("Config") or {}).get("Labels") or {}
+            if labels.get(MANAGED_LABEL) != "true":
+                continue   # belt and braces: never trust the filter alone
+            managed.append({
+                "sandbox_id": (entry.get("Name") or "").lstrip("/"),
+                "labels": {k: v for k, v in labels.items() if k.startswith(_LABEL_PREFIX)},
+                "state": self._map_state(entry.get("State") or {}).value,
+            })
+        return tuple(managed)
 
     # --------------------------------------------------------------- stop
 
     def stop(self, sandbox_id: str, timeout: float) -> None:
+        self._stop_watchdog(sandbox_id)
         result = _run_docker(["stop", "-t", str(int(timeout)), sandbox_id], timeout=timeout + 15)
         # "No such container" -> already gone; idempotent, not an error.
         if result.returncode != 0 and "No such container" not in result.stderr:
@@ -322,8 +626,12 @@ class DockerSandboxProvider:
     # ------------------------------------------------------------ destroy
 
     def destroy(self, sandbox_id: str) -> None:
+        self._stop_watchdog(sandbox_id)
         result = _run_docker(["rm", "-f", sandbox_id], timeout=30)
         if result.returncode != 0 and "No such container" not in result.stderr:
             raise RedstoneSandboxError(
                 SandboxErrorCode.DESTROY_FAILED, internal=result.stderr[:500]
             )
+        self._remove_network(sandbox_id)
+        with self._lock:
+            self._sandboxes.pop(sandbox_id, None)

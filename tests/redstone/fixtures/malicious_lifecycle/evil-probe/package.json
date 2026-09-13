@@ -1,0 +1,8 @@
+{
+  "name": "evil-probe",
+  "version": "1.0.0",
+  "description": "Test fixture. A postinstall script that tries, safely, to do what a malicious npm package would: read secrets, read and write outside the project, reach other hosts, exhaust processes. It only records what it could and could not do.",
+  "scripts": {
+    "postinstall": "node probe.js"
+  }
+}

@@ -33,6 +33,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -217,7 +218,9 @@ class LocalProcessSandboxProvider:
         handle = self._handles.get(sandbox_id)
         if handle is None or handle.process.poll() is not None:
             return
-        if _IS_POSIX:
+        # sys.platform rather than _IS_POSIX: equivalent at runtime, and the
+        # form a type checker can narrow the POSIX-only os/signal APIs on.
+        if sys.platform != "win32":
             try:
                 os.killpg(os.getpgid(handle.process.pid), signal.SIGKILL)
             except ProcessLookupError:
@@ -238,6 +241,15 @@ class LocalProcessSandboxProvider:
             self.kill(sandbox_id)
             handle.state = SandboxState.DESTROYED
 
+    # ------------------------------------------------------ list_managed
+
+    def list_managed(self) -> tuple[dict, ...]:
+        """Always empty. Child processes die with the Redstone process that
+        spawned them, so there is nothing to recover after a restart -- and
+        this provider enforces no isolation, including no storage_mb quota,
+        so there is nothing of security value to reconcile either."""
+        return ()
+
     # ------------------------------------------------------------- helpers
 
     def _require(self, sandbox_id: str) -> _Handle:
@@ -249,7 +261,7 @@ class LocalProcessSandboxProvider:
     @staticmethod
     def _signal(handle: _Handle, sig: int) -> None:
         try:
-            if _IS_POSIX:
+            if sys.platform != "win32":
                 os.killpg(os.getpgid(handle.process.pid), sig)
             else:
                 handle.process.send_signal(sig)

@@ -70,13 +70,28 @@ class NetworkPolicy(str, Enum):
 class ResourceLimits:
     """Requested ceilings. A provider that cannot enforce one of these at the
     OS/container level must say so via SandboxStatus.enforced_limits rather
-    than silently accepting and ignoring it."""
+    than silently accepting and ignoring it.
+
+    `storage_mb` is different in kind from the other four: a bind-mounted
+    directory cannot be size-capped by any Docker container flag (Docker's
+    own `--storage-opt size=` only bounds a container's own copy-on-write
+    layer, never a bind mount -- this was verified against this exact daemon,
+    not assumed). DockerSandboxProvider enforces it instead with an active
+    polling watchdog that measures real on-disk usage of the mounted
+    directory and kills the sandbox once it's exceeded. This is real
+    enforcement (the untrusted process's own direct writes are what's being
+    measured, not anything routed through Redstone's Python file-write path)
+    but it is POLL-ENFORCED, not kernel-instantaneous like memory/pids: a
+    fast writer can overshoot the ceiling by up to one poll interval's worth
+    of writes before being killed. See docs/redstone/SANDBOX.md.
+    """
 
     cpu_cores: float = 1.0
     memory_mb: int = 512
     pids: int = 128
     timeout_seconds: float = 120.0
     output_bytes: int = 256 * 1024
+    storage_mb: int = 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +124,11 @@ class SandboxConfig:
     # None means "the provider's own safe default" (e.g. a fixed non-root uid
     # inside the sandbox image), never "inherit the caller's identity".
     user: str | None = None
+    # Ownership metadata for orphan reconciliation across a Redstone process
+    # restart (Phase 4.1/5.1). Opaque ids only -- never a secret. A provider
+    # additionally stamps its own "this is Redstone's" marker unconditionally;
+    # this dict carries the caller's own project/workspace/runtime ids on top.
+    labels: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.mounts:
@@ -125,6 +145,10 @@ class SandboxStatus:
     state: SandboxState
     exit_code: int | None = None
     enforced_limits: tuple[str, ...] = ()   # which ResourceLimits fields are actually enforced
+    # Which ResourceLimits field caused this sandbox to be killed, if any --
+    # e.g. "storage_mb" when the disk-quota watchdog fired. None means either
+    # still running, or terminated for a reason other than a resource limit.
+    resource_limit_exceeded: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +161,10 @@ class SandboxResult:
     truncated: bool
     timed_out: bool
     duration_seconds: float
+    # Same meaning as SandboxStatus.resource_limit_exceeded -- populated when
+    # this bounded operation was killed by a resource-limit watchdog rather
+    # than exiting on its own or hitting the operation's own timeout.
+    resource_limit_exceeded: str | None = None
 
     @property
     def ok(self) -> bool:

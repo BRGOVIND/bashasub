@@ -70,3 +70,21 @@ class SandboxProvider(Protocol):
         """Remove every resource associated with the sandbox. Idempotent --
         destroying an already-destroyed or never-created id must not raise."""
         ...
+
+    def list_managed(self) -> tuple[dict, ...]:
+        """Every sandbox this provider recognises as Redstone-owned, found by
+        querying the provider's own backend directly -- NOT from any
+        in-memory record. This is what makes orphan reconciliation possible
+        across a Redstone process restart: RuntimeManager's in-memory
+        `_runtimes` dict is gone the moment the process dies, but a
+        container's labels survive as long as the container itself does.
+
+        Each entry is `{"sandbox_id": ..., "labels": {...}, "state": ...}`.
+        A provider with no persistent backend (e.g. a local-process provider,
+        whose processes die with the parent Redstone process anyway) may
+        legitimately return an empty tuple always -- there is nothing to
+        recover after a restart in that case, and its docstring says so.
+        Must never return an entry for something not carrying this
+        provider's own Redstone-ownership marker.
+        """
+        ...

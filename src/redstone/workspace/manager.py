@@ -14,6 +14,7 @@ Standard library only.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -32,6 +33,29 @@ _ID = re.compile(r"^[A-Za-z0-9_-]{3,64}$")
 
 class WorkspaceError(Exception):
     """A workspace could not be created, found, or removed."""
+
+
+def _remove_link_entry(function, path, exc) -> None:
+    """rmtree error handler for entries a sandbox created.
+
+    A Linux symlink written by a sandboxed process onto a Windows bind mount
+    (npm creates them routinely, e.g. node_modules/.bin/*) appears on the
+    host as a reparse point that reports a directory mode; rmtree tries to
+    descend into it and cannot open it (WinError 1920). Removing the entry
+    itself works -- rmdir for directory-type links, remove for file-type --
+    and removes only the link, never its target. Anything else re-raises.
+    """
+    if not os.path.lexists(path):
+        return   # already removed (e.g. by this handler, one step earlier)
+    for remover in (os.rmdir, os.remove):
+        try:
+            remover(path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            continue
+    raise exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,7 +144,7 @@ class WorkspaceManager:
         if root.parent != self.workspaces_root:
             raise WorkspaceError("refusing to remove a path outside the workspaces root")
 
-        shutil.rmtree(root)
+        shutil.rmtree(root, onexc=_remove_link_entry)
 
     def list_ids(self) -> tuple[str, ...]:
         if not self.workspaces_root.is_dir():

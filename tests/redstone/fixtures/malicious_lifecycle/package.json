@@ -1,0 +1,9 @@
+{
+  "name": "redstone-malicious-lifecycle-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Test fixture: a project whose only dependency is a LOCAL tarball of a package with a hostile postinstall script. The test packs evil-probe/ into evil-probe-1.0.0.tgz at run time. Never published; never fetched from a registry.",
+  "dependencies": {
+    "evil-probe": "file:./evil-probe-1.0.0.tgz"
+  }
+}
