@@ -56,6 +56,7 @@ class FakeSandboxProvider:
         self._sandboxes: dict[str, dict] = {}
         self.foreign: dict[str, dict] = {}
         self.limit_exceeded: dict[str, str] = {}
+        self.configs: dict[str, object] = {}   # every config ever created, never popped
         self._counter = 0
 
         self.create_calls: list[str] = []
@@ -89,6 +90,7 @@ class FakeSandboxProvider:
             self._sandboxes[sandbox_id] = {
                 "state": SandboxState.CREATED, "config": config, "health_calls": 0,
             }
+            self.configs[sandbox_id] = config
         self.create_calls.append(sandbox_id)
         return sandbox_id
 

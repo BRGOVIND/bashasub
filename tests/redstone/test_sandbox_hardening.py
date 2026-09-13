@@ -445,19 +445,20 @@ def test_install_network_cannot_reach_other_containers(docker, project, other_co
 def test_install_network_reaches_the_npm_registry(docker, project):
     sandbox_id = _long_running(docker, _config(project, ("sleep", "30"),
                                                policy=NetworkPolicy.INSTALL_ONLY))
+    # Proxy-aware client: since Phase 4.2 the registry is reachable only
+    # through the egress proxy (busybox wget cannot tunnel HTTPS via a proxy).
     result = docker.exec_in(
-        sandbox_id, ("wget", "-T", "10", "-q", "-O", "/dev/null", "https://registry.npmjs.org/react"),
-        timeout=20,
+        sandbox_id, ("npm", "view", "react", "name", "--fetch-retries=0", "--fetch-timeout=10000"),
+        timeout=60,
     )
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.stdout + result.stderr
 
 
 def test_install_network_metadata_address_is_unreachable_here(docker, project):
     """ENVIRONMENT LIMITATION: this machine is not a cloud host, so there is
-    no metadata service to be blocked. This proves nothing answers there
-    from the install network in THIS environment; it is not evidence that a
-    real cloud metadata endpoint would be blocked (it would NOT be -- see
-    test_install_network_egress_is_not_registry_restricted)."""
+    no metadata service here. Since Phase 4.2 a real one would also be
+    unreachable: the install network has no route out, and the egress proxy
+    refuses 169.254.0.0/16 by address (test_install_egress.py)."""
     sandbox_id = _long_running(docker, _config(project, ("sleep", "30"),
                                                policy=NetworkPolicy.INSTALL_ONLY))
     result = docker.exec_in(sandbox_id, ("node", "-e", NODE_CONNECT, "169.254.169.254", "80"),
@@ -465,17 +466,19 @@ def test_install_network_metadata_address_is_unreachable_here(docker, project):
     assert "CONNECTED" not in result.stdout
 
 
-def test_install_network_egress_is_not_registry_restricted(docker, project):
-    """CHARACTERIZATION of a documented, open gap: during INSTALL_ONLY a
-    lifecycle script can reach an arbitrary internet host, not just the npm
-    registry. Registry-only egress requires an egress proxy that does not
-    exist yet. If this test starts failing, the gap has closed -- update
-    SECURITY.md and turn this into a negative test."""
+def test_install_network_egress_is_registry_restricted(docker, project):
+    """Formerly a CHARACTERIZATION test of the open gap (it asserted that an
+    install sandbox COULD reach github.com). Phase 4.2 closed the gap, and as
+    that test's own docstring instructed, it is now a negative test: an
+    INSTALL_ONLY sandbox has no direct route to an arbitrary internet host,
+    by name or by address. Proxy-policy coverage lives in
+    test_install_egress.py."""
     sandbox_id = _long_running(docker, _config(project, ("sleep", "30"),
                                                policy=NetworkPolicy.INSTALL_ONLY))
-    result = docker.exec_in(sandbox_id, ("node", "-e", NODE_CONNECT, "github.com", "443"),
-                            timeout=15)
-    assert "CONNECTED" in result.stdout, result.stdout
+    for host in ("github.com", "1.1.1.1"):
+        result = docker.exec_in(sandbox_id, ("node", "-e", NODE_CONNECT, host, "443"),
+                                timeout=15)
+        assert "CONNECTED" not in result.stdout, (host, result.stdout)
 
 
 def test_install_network_is_removed_with_its_sandbox(docker, project):
@@ -494,16 +497,33 @@ def test_install_network_is_removed_with_its_sandbox(docker, project):
 
 @pytest.mark.parametrize("policy", [NetworkPolicy.DENY, NetworkPolicy.INSTALL_ONLY])
 def test_constructed_argv_has_every_required_flag_and_no_forbidden_one(monkeypatch, project, policy):
-    captured: dict[str, list] = {"network": []}
+    captured: dict[str, list] = {"network": [], "proxy": [], "rm": []}
     real_run = subprocess.run
 
+    def ok(argv, stdout=""):
+        return subprocess.CompletedProcess(argv, 0, stdout, "")
+
     def spy(argv, **kwargs):
+        # Nothing reaches the daemon: the proxy's startup sequence is
+        # answered here so the SANDBOX's own argv can be captured after it.
         if argv[:2] == ["docker", "create"]:
+            if argv[argv.index("--name") + 1].endswith("-proxy"):
+                captured["proxy"] = argv
+                return ok(argv)
             captured["create"] = argv
             return subprocess.CompletedProcess(argv, 1, "", "intentionally not created")
         if argv[:2] == ["docker", "network"]:
             captured["network"].append(argv)
-            return subprocess.CompletedProcess(argv, 0, "", "")
+            return ok(argv)
+        if argv[:2] == ["docker", "start"]:
+            return ok(argv)
+        if argv[:2] == ["docker", "logs"]:
+            return ok(argv, "REDSTONE_EGRESS_PROXY_READY\n")
+        if argv[:2] == ["docker", "inspect"]:
+            return ok(argv, "172.30.0.2\n")
+        if argv[:2] == ["docker", "rm"]:
+            captured["rm"].append(argv)
+            return ok(argv)
         return real_run(argv, **kwargs)
 
     monkeypatch.setattr(docker_provider_module.subprocess, "run", spy)
@@ -529,11 +549,30 @@ def test_constructed_argv_has_every_required_flag_and_no_forbidden_one(monkeypat
     if policy is NetworkPolicy.DENY:
         assert network_value == "none"
     else:
-        assert network_value.endswith("-net")
-        create_net = next(a for a in captured["network"] if a[2] == "create")
-        assert "com.docker.network.bridge.enable_icc=false" in create_net
-        # the network of a sandbox that failed to create is removed again
+        assert network_value == f"{argv[argv.index('--name') + 1]}-net"
+        creates = [a for a in captured["network"] if a[2] == "create"]
+        internal = next(a for a in creates if a[-1] == network_value)
+        egress = next(a for a in creates if a[-1].endswith("-egress"))
+        assert "--internal" in internal          # the sandbox's network has no route out
+        assert "--internal" not in egress        # only the proxy's side reaches out ...
+        assert "com.docker.network.bridge.enable_icc=false" in egress   # ... alone
+        for var in ("HTTPS_PROXY=http://172.30.0.2:3128", "https_proxy=http://172.30.0.2:3128",
+                    "npm_config_https_proxy=http://172.30.0.2:3128", "NO_PROXY=", "no_proxy="):
+            assert var in argv, var
+
+        proxy = " ".join(captured["proxy"])
+        for required in ("--security-opt no-new-privileges", "--cap-drop ALL", "--read-only",
+                         "--user 1000:1000", f"--label {MANAGED_LABEL}=true", "--pids-limit",
+                         "--memory", "--memory-swap", "--cpus"):
+            assert required in proxy, required
+        for forbidden in ("--privileged", "--network host", "--pid ", "--pid=", "--ipc ",
+                          "--device", "docker.sock", " -p ", "--publish", "--cap-add"):
+            assert forbidden not in proxy, forbidden
+
+        # A sandbox that failed to create takes its proxy and networks with it.
         assert any(a[2] == "rm" and a[3] == network_value for a in captured["network"])
+        assert any(a[2] == "rm" and a[3].endswith("-egress") for a in captured["network"])
+        assert any(a[-1].endswith("-proxy") for a in captured["rm"])
 
 
 def test_labels_cannot_forge_or_escape_the_ownership_namespace(project):
@@ -575,7 +614,9 @@ def test_hostile_postinstall_script_is_contained(docker, tmp_path, monkeypatch, 
         # Test-only hints so the probe knows what to aim at. Neither is a
         # secret -- and neither name may look like one, or the probe's own
         # secret-name scan reports the hint itself.
-        env={"PROBE_TARGET_IP": other_container, "PROBE_OUTSIDE_FILE": str(host_secret)},
+        env={"PROBE_TARGET_IP": other_container, "PROBE_OUTSIDE_FILE": str(host_secret),
+             "PROBE_REGISTRY_IP": next(a[4][0] for a in __import__("socket").getaddrinfo(
+                 "registry.npmjs.org", 443, 2))},   # AF_INET
     )
     _, result = _run(docker, config, timeout=300)
     assert result.ok, result.stdout[-2000:] + result.stderr[-2000:]
@@ -598,8 +639,18 @@ def test_hostile_postinstall_script_is_contained(docker, tmp_path, monkeypatch, 
         assert report["write"][target]["ok"] is False, (target, report["write"][target])
     assert report["write"]["tmp"]["ok"] is True   # bounded tmpfs is the one scratch area
 
-    assert report["net"]["other_container"]["ok"] is False
-    assert report["net"]["metadata"]["ok"] is False   # ENVIRONMENT LIMITATION, see above
+    net = report["net"]
+    assert net["other_container"]["ok"] is False
+    # Phase 4.2: every direct path is gone -- metadata, localhost, private,
+    # arbitrary public, and even the allowed registry's own address.
+    for probe in ("metadata", "localhost", "private_ip", "public_ip_direct", "registry_ip_direct"):
+        assert net[probe]["ok"] is False, (probe, net[probe])
+    # ... and the one route that exists, the proxy, refuses everything else.
+    for probe in ("proxy_connect_example", "proxy_connect_metadata", "proxy_connect_registry_ip"):
+        assert net[probe]["status"].startswith("HTTP/1.1 403"), (probe, net[probe])
+    # npm bypass attempts from inside a lifecycle script all fail.
+    for attempt, outcome in report["npm"].items():
+        assert outcome["status"] not in (0, None), (attempt, outcome)
 
     procs = report["processes"]
     assert procs["alive"] < 128, procs     # --pids-limit held inside a lifecycle script

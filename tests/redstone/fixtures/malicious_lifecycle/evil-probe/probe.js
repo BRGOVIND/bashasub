@@ -91,12 +91,60 @@ function trySpawnMany(n) {
   });
 }
 
+// 6. The egress proxy itself (Phase 4.2): ask it for forbidden destinations.
+function tryProxyConnect(target) {
+  return new Promise((resolve) => {
+    let proxy;
+    try { proxy = new URL(process.env.HTTPS_PROXY || process.env.https_proxy); }
+    catch (_) { resolve({ status: "NO_PROXY_CONFIGURED" }); return; }
+    const socket = net.connect({ host: proxy.hostname, port: Number(proxy.port) });
+    const done = (status) => { socket.destroy(); resolve({ status }); };
+    socket.setTimeout(10000, () => done("TIMEOUT"));
+    socket.on("connect", () => socket.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`));
+    socket.on("data", (d) => done(String(d).split("\r\n")[0]));
+    socket.on("error", (e) => done(`ERR ${e.code}`));
+  });
+}
+
+// 7. npm itself, with every knob an attacker controls.
+const { spawnSync } = require("child_process");
+const PROXY_VARS = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
+                    "npm_config_proxy", "npm_config_https_proxy"];
+function npmRun(args, envPatch = {}, unset = []) {
+  const env = { ...process.env, ...envPatch };
+  for (const key of unset) delete env[key];
+  const run = spawnSync("npm", [...args, "--fetch-retries=0", "--fetch-timeout=8000"],
+                        { env, timeout: 60000, encoding: "utf8" });
+  return { status: run.status, signal: run.signal };
+}
+
 (async () => {
   results.net = {};
   if (process.env.PROBE_TARGET_IP) {
     results.net.other_container = await tryConnect(process.env.PROBE_TARGET_IP, 8080);
   }
   results.net.metadata = await tryConnect("169.254.169.254", 80);
+  results.net.localhost = await tryConnect("127.0.0.1", 3128);
+  results.net.private_ip = await tryConnect("10.0.0.1", 443);
+  results.net.public_ip_direct = await tryConnect("1.1.1.1", 443);
+  if (process.env.PROBE_REGISTRY_IP) {
+    results.net.registry_ip_direct = await tryConnect(process.env.PROBE_REGISTRY_IP, 443);
+  }
+  results.net.proxy_connect_example = await tryProxyConnect("example.com:443");
+  results.net.proxy_connect_metadata = await tryProxyConnect("169.254.169.254:80");
+  results.net.proxy_connect_registry_ip = await tryProxyConnect(
+    `${process.env.PROBE_REGISTRY_IP || "104.16.0.1"}:443`);
+
+  results.npm = {
+    no_proxy_other_registry: npmRun(
+      ["view", "is-odd", "version", "--registry=https://registry.yarnpkg.com/"],
+      { NO_PROXY: "*", no_proxy: "*" }),
+    unset_proxy_vars: npmRun(["view", "is-odd", "version"], {}, PROXY_VARS),
+    attacker_proxy: npmRun(["view", "is-odd", "version"],
+      Object.fromEntries(PROXY_VARS.map((k) => [k, "http://1.1.1.1:8080"]))),
+    arbitrary_registry_url: npmRun(["view", "is-odd", "version", "--registry=https://example.com/"]),
+  };
+
   results.processes = await trySpawnMany(400);
 
   const out = "/workspace/project/probe-results.json";

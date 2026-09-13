@@ -319,12 +319,17 @@ class TestDockerProviderRealIsolation:
         provider.start(sid)
         time.sleep(0.3)
 
+        # Phase 4.2: INSTALL_ONLY reaches the registry only through the egress
+        # proxy, so the probe must be proxy-aware (busybox wget cannot tunnel
+        # HTTPS through a proxy). Stronger than before: this now proves the
+        # registry is reachable THROUGH the policy.
         result = provider.exec_in(
-            sid, ("wget", "-T", "10", "-q", "-O", "/dev/null", "https://registry.npmjs.org/react"),
-            timeout=15,
+            sid, ("npm", "view", "react", "name", "--fetch-retries=0", "--fetch-timeout=10000"),
+            timeout=60,
         )
 
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.stdout + result.stderr
+        assert "react" in result.stdout
         provider.kill(sid)
         provider.destroy(sid)
 
