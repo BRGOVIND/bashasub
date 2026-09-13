@@ -80,7 +80,7 @@ structurally unreachable from inside the project rather than merely hidden.
 | 19 | **Arbitrary command execution** | The trusted backend itself still executes nothing (`grep -rn "subprocess" src/redstone/` outside `sandbox/`/`ai/` returns nothing). Execution now exists, but only *inside* the sandbox, and only as one of five fixed named operations (`Operation` enum) resolved through a static `(Framework, Operation) -> argv` table — never a string built from agent output or project content. | `test_dangerous_flags_never_appear_in_the_constructed_argv`; `SandboxCommand.resolve()` unit tests (`UNSUPPORTED_OPERATION` for any framework/operation not in the table) |
 | 20 | **Dependency install on the trusted host** | **Mitigated (Phase 4).** `npm install` runs only inside an ephemeral, network-restricted (`NetworkPolicy.INSTALL_ONLY`) sandbox, destroyed immediately after; it never touches the Redstone process's own filesystem or environment. | `test_real_npm_install_succeeds_over_install_only_network`, `RuntimeManager._run_install` (always `provider.destroy()`s in a `finally`) |
 | 21 | **Preview breakout / XSS** | ⏳ **Not yet built (Phase 6).** Planned: separate origin, sandboxed iframe, CSP. | — |
-| 22 | **SSRF / internal network access from running project code** | **Mitigated (Phase 4).** `NetworkPolicy.DENY` (`--network none`) is the default and the only policy used once the dev server is running — the container has no network device at all, so no address is reachable, internal or otherwise. Install-phase egress (`INSTALL_ONLY`, a dedicated per-sandbox network since 4.1) cannot reach other containers, but internet egress is not restricted to the registry — see Known risks and #61. | `test_network_deny_blocks_outbound`, `test_full_lifecycle_against_real_docker` |
+| 22 | **SSRF / internal network access from running project code** | **Mitigated (Phase 4).** `NetworkPolicy.DENY` (`--network none`) is the default and the only policy used once the dev server is running — the container has no network device at all, so no address is reachable, internal or otherwise. Install-phase egress (`INSTALL_ONLY`) is, since 4.2, an `--internal` network whose only exit is an egress proxy allowing the npm registry alone — see #61 and #92–#101. | `test_network_deny_blocks_outbound`, `test_full_lifecycle_against_real_docker` |
 | 23 | **Prompt injection from project files** | **Mitigated — see #46 (Phase 3).** This row predates Phase 3; left numbered rather than renumbering the table. | see #46 |
 | 24 | **Provider error leaking credentials** | **Mitigated — see #27 (Phase 2B).** This row predates Phase 2B; left numbered rather than renumbering the table. | see #27 |
 
@@ -104,21 +104,27 @@ assumed. A deployment without a reachable Docker daemon falls back to the
 unisolated local provider per the paragraph above; that fallback is
 documented, tested, and visible at `/api/health`, never silent.
 
-**Install-phase internet egress is NOT restricted to the npm registry
-(still open after Phase 4.1).** During `npm install`, `NetworkPolicy.INSTALL_ONLY`
-gives the sandbox outbound networking so dependencies can be fetched, and
-lifecycle scripts run inside that window. Phase 4.1 moved it off Docker's
-shared default bridge onto a dedicated per-sandbox network, so it can no
-longer reach any other container on the machine (confirmed empirically
-before the fix: an install container *could* connect to an unrelated
-container). But it can still reach arbitrary internet hosts, and whatever is
-routable from its network's gateway. Registry-only egress needs an egress
-proxy — a new component deliberately out of scope for a hardening-only phase;
-a Python hostname check would not constrain the container and was not added.
-The container still cannot reach Redstone's own environment or files, and the
-window closes when install ends. Characterization-tested
-(`test_install_network_egress_is_not_registry_restricted`) so a change in
-either direction is noticed.
+**Install-phase egress is restricted to the npm registry (closed in Phase
+4.2), with these residual risks.**
+
+How it's closed:
+- An install sandbox now sits on a Docker `--internal` network — no route out,
+  no external DNS, both verified on this daemon.
+- Its only peer is a per-install egress proxy, which allows `CONNECT` to the
+  configured registry on 443, and only to public addresses.
+- Nothing the sandbox does to its proxy variables, `NO_PROXY` or npm's
+  registry setting widens this; every such attempt is tested from inside a
+  real sandbox and from inside a hostile lifecycle script.
+
+What remains:
+- The proxy trusts the resolver's *public* answers for allowlisted names. A
+  poisoned resolver could redirect the registry's name to an attacker's public
+  IP; npm's end-to-end TLS check is then the safeguard.
+- The allowed registry is itself a destination: low-bandwidth side channels,
+  and packages hosted there, are outside a network boundary's reach.
+- The proxy is trusted code. A compromise of the proxy process would gain its
+  egress position — still non-root, capability-less and confined.
+- Each registry an operator adds is more reachable surface.
 
 **Storage is poll-enforced, not kernel-enforced.** A bind-mounted directory
 cannot be size-capped by any Docker flag, and a host-level quota would need
@@ -252,8 +258,8 @@ provider-neutral abstraction and the empirical isolation evidence, is in
 | 57 | **Docker socket access from inside the sandbox** | No bind mount of `docker.sock` exists anywhere in the codebase. | `test_dangerous_flags_never_appear_in_the_constructed_argv` (asserts `"docker.sock"` never appears in constructed argv) |
 | 58 | **Privileged container / host namespaces** (`--privileged`, `--network host`, `--pid host`, `--ipc host`) | None of these flags are ever constructed, for any config. | `test_dangerous_flags_never_appear_in_the_constructed_argv` |
 | 59 | **Localhost / internal-service SSRF once the dev server is running** | `NetworkPolicy.DENY` (`--network none`) is the default and only policy used for the long-running dev server sandbox — it has no network device at all. | `test_network_deny_blocks_outbound`, `test_full_lifecycle_against_real_docker`'s `network_probe` |
-| 60 | **Cloud metadata endpoint access** (`169.254.169.254`) | Same mechanism as #59: with no network device, the metadata address is unreachable exactly like every other address. Not separately reproduced against a real metadata service (this environment isn't a cloud host); inferred from the same `--network none` primitive verified generally. | — (mechanism shared with #59, not independently reproduced) |
-| 61 | **Private-network / arbitrary egress during dependency install** | ⚠️ **Partially mitigated (4.1).** Other containers: blocked (per-sandbox network, ICC off). Arbitrary internet and whatever the network gateway routes to: **NOT ENFORCED** — see Known risks. | `test_install_network_cannot_reach_other_containers`; gap characterized by `test_install_network_egress_is_not_registry_restricted` |
+| 60 | **Cloud metadata endpoint access** (`169.254.169.254`) | Run phase: no network device. Install phase (4.2): no route **and** the egress proxy refuses `169.254.0.0/16` by address and by resolution. ⚠️ **ENVIRONMENT LIMITATION:** not reproduced against a real metadata service (not a cloud host). | `test_deny_policy_has_no_route_to_anything`, `test_proxy_denies_everything_but_the_allowlist[169.254.169.254:80]`, `test_proxy_judges_what_a_name_resolves_to[metadata.test]` |
+| 61 | **Private-network / arbitrary egress during dependency install** | **Mitigated (4.2).** Enforced by Docker (the `--internal` network has no route) and by the proxy (only the allowlisted registry, on 443, at public addresses). Residual risks under Known risks. | `test_install_egress.py` (62 real-Docker tests), `test_install_network_egress_is_registry_restricted` (formerly the characterization test of this gap, now inverted) |
 | 62 | **Fork bomb / unbounded process creation** | `--pids-limit` is a kernel-enforced cgroup ceiling, driven to its limit and observed to actually block forking. | `test_pids_limit_bounds_a_fork_bomb` |
 | 63 | **Memory exhaustion** | `--memory` triggers a real kernel OOM-kill, observed directly. | `test_memory_limit_is_enforced` |
 | 64 | **CPU exhaustion** | **Mitigated — behaviourally verified in 4.1.** `--cpus`; measured CPU share tracks the limit (0.244 / 0.498 / 0.988 for 0.25 / 0.5 / 1.0). | `test_cpu_limit_is_behaviourally_enforced` |
@@ -274,12 +280,12 @@ provider-neutral abstraction and the empirical isolation evidence, is in
 
 | # | Threat | Mitigation | Test |
 |---|---|---|---|
-| 77 | **Disk exhaustion by direct writes into the project mount** (npm install, lifecycle script, generated code) | **POLL-ENFORCED:** `ResourceLimits.storage_mb`; a host-side watchdog measures the mount's real on-disk usage and kills the sandbox past the ceiling (`RUNTIME_RESOURCE_LIMIT`). Not instantaneous — see Known risks. | `test_storage_quota_kills_a_process_writing_directly_to_the_mount`, `test_storage_quota_does_not_fire_under_the_limit` |
+| 77 | **Disk exhaustion by direct writes into the project mount** (npm install, lifecycle script, generated code) | **PERIODICALLY ENFORCED:** `ResourceLimits.storage_mb`; a host-side watchdog measures the mount's real on-disk usage and kills the sandbox past the ceiling (`RUNTIME_RESOURCE_LIMIT`). Not instantaneous — see Known risks. | `test_storage_quota_kills_a_process_writing_directly_to_the_mount`, `test_storage_quota_does_not_fire_under_the_limit` |
 | 78 | **Disk/RAM exhaustion through `/tmp`** | **ENFORCED:** tmpfs mounted with `size=<storage_mb>m` (was unbounded — Docker's default allows half of host RAM). | `test_tmpfs_is_bounded_by_the_storage_limit` |
 | 79 | **Swap headroom beyond the memory limit** | `--memory-swap` equal to `--memory`. | `test_constructed_argv_has_every_required_flag_and_no_forbidden_one` |
 | 80 | **Output truncation silently unreported / stderr lost** | `SandboxResult.truncated` is exact; stdout and stderr are genuinely separate, each bounded by the sandbox's own `output_bytes`. | `test_output_*`, `test_stdout_flood_is_bounded_and_flagged`, `test_stderr_flood_is_bounded_and_flagged`, `test_stdout_and_stderr_are_genuinely_separate` |
-| 81 | **Install sandbox reaching other containers** (a user's local database on Docker's default bridge) | **ENFORCED:** dedicated per-sandbox network with ICC disabled; removed on destroy, including after a restart. | `test_install_network_cannot_reach_other_containers` (with positive control), `test_install_network_is_removed_with_its_sandbox` |
-| 82 | **Hostile npm lifecycle script** | Contained by the same posture as every sandbox. A local hostile package's `postinstall` found no secrets, couldn't read or write outside the project, couldn't reach another container, and was held by `--pids-limit`. It **could** reach the internet (#61). | `test_hostile_postinstall_script_is_contained` |
+| 81 | **Install sandbox reaching other containers** (a user's local database on Docker's default bridge) | **ENFORCED BY DOCKER:** since 4.2 the install sandbox's network is `--internal` and its only other member is its own proxy; the proxy's outbound network has ICC disabled and no other member. All removed on destroy, including after a restart. | `test_install_network_cannot_reach_other_containers` (with positive control), `test_install_network_is_removed_with_its_sandbox` |
+| 82 | **Hostile npm lifecycle script** | Contained by the same posture as every sandbox. A local hostile package's `postinstall` found no secrets, couldn't read or write outside the project, couldn't reach another container, and was held by `--pids-limit`. Since 4.2 it also could **not** reach the internet, the registry's own IP, localhost or private addresses directly; the proxy refused its `CONNECT`s to other hosts; and every npm bypass it tried (`NO_PROXY=*`, unset proxy vars, attacker proxy, foreign registry) failed. | `test_hostile_postinstall_script_is_contained` |
 | 83 | **Symlink/hardlink escape by code inside the sandbox** | **ENFORCED** by the container's mount namespace (distinct from Phase 2A.1's host-side checks, which still apply when Redstone reads what the sandbox left behind). | `test_symlinks_inside_the_sandbox_cannot_reach_the_host`, `test_hardlinks_inside_the_sandbox_cannot_capture_files_outside_the_mount` |
 | 84 | **Host device access / device creation** | **ENFORCED:** pseudo-devices only, no block devices, `mknod` fails (`CAP_MKNOD` dropped), `--device` and `--privileged` never constructed. | `test_device_posture` |
 | 85 | **Privilege escalation via setuid binaries** | `no-new-privileges` — **kernel state verified** (`NoNewPrivs: 1`, `Seccomp: 2`); no escalation attempt performed. | `test_no_new_privs_bit_is_set_on_the_sandboxed_process` |
@@ -290,12 +296,36 @@ provider-neutral abstraction and the empirical isolation evidence, is in
 | 90 | **Misleading public error codes / events / states** | Every `RuntimeErrorCode` is live or documented RESERVED (`NETWORK_DENIED`, `INVALID_REQUEST`); `runtime.output`/`runtime.error` and `IDLE`/`EXPIRED` are marked reserved. | `test_every_public_error_code_is_either_raised_or_documented_reserved` |
 | 91 | **Undeletable workspace from sandbox-created links** (Windows hosts; found during 4.1) | `WorkspaceManager.destroy()` removes link entries a sandbox wrote onto the bind mount (which plain `rmtree` cannot remove on Windows) — only the link, never its target. `read_file` on such an entry fails safely with no host path disclosed (the tool layer reports only the exception type). | `test_workspace_with_sandbox_created_links_can_still_be_destroyed` |
 
+### Phase 4.2 install egress
+
+Threat model: arbitrary code execution inside `npm install`. Topology:
+`install sandbox —(<id>-net, --internal)— <id>-proxy —(<id>-egress)— internet`.
+Full detail in `docs/redstone/SANDBOX.md`.
+
+| # | Threat | Mitigation | Test |
+|---|---|---|---|
+| 92 | **Direct egress from the install sandbox** (bypassing the proxy) | **ENFORCED BY DOCKER:** `--internal` network, so `ENETUNREACH` to every outside address; exactly two members (sandbox and its proxy). | `test_sandbox_has_no_direct_route` (6 destinations), `test_proxy_and_sandbox_topology_and_hardening` |
+| 93 | **Arbitrary destinations through the proxy** (CONNECT tunnel as a generic forward proxy) | **ENFORCED BY PROXY:** CONNECT only; exact-match host allowlist; allowed ports only; IP literals and malformed/numeric names refused; plain HTTP/absolute-URI refused, so no redirect is ever followed. | `test_proxy_denies_everything_but_the_allowlist` (22 targets), `test_proxy_never_forwards_or_follows_plain_http` |
+| 94 | **Allowlisted name resolving to a private/loopback/link-local/metadata address**, incl. DNS rebinding | **ENFORCED BY PROXY:** every answer must be public unicast, and the proxy connects to the validated IP (no second lookup). ⚠️ Public answers from a poisoned resolver are trusted; TLS is then the safeguard. | `test_proxy_judges_what_a_name_resolves_to` (10 pinned resolutions, incl. IPv6 and mixed answers) |
+| 95 | **DNS as an exfiltration channel from the sandbox** | **ENFORCED BY DOCKER:** no external name resolution on `--internal` networks. | `test_sandbox_cannot_resolve_external_names` |
+| 96 | **Proxy bypass via environment / npm config** (`NO_PROXY=*`, unset or attacker `HTTP(S)_PROXY`, `--registry`, project `.npmrc`) | Enforcement doesn't depend on any of them: no route exists except the proxy. | `test_removing_proxy_settings_leaves_no_network`, `test_no_proxy_star_cannot_reach_anything_else`, `test_attacker_proxy_is_unreachable`, `test_registry_override_is_refused`, `test_hostile_postinstall_script_is_contained` |
+| 97 | **Bypassing the hostname policy with the registry's own IP** | Refused by both layers. | `test_direct_ip_of_the_allowed_registry_is_denied` |
+| 98 | **Proxy unavailable → silent fallback to open networking** | **Fails closed:** `INSTALL_ONLY` has one implementation; proxy failure → `CREATE_FAILED`, nothing left behind; proxy stopped mid-install → no network. | `test_unavailable_proxy_fails_create_closed` (3 modes), `test_stopped_proxy_means_no_network_not_a_fallback`, `test_misconfigured_allowlist_makes_the_proxy_refuse_to_start` |
+| 99 | **Cross-workspace reach via shared egress infrastructure** | One proxy and two networks per install; neither workspace can reach, reconfigure or destroy the other's. | `test_two_workspaces_are_isolated_from_each_other` |
+| 100 | **Orphaned proxies/networks after a restart**; reconciliation touching the wrong things | Proxy carries the owning runtime's labels; destroy removes the proxy and both networks by derived name. | `test_orphan_recovery_removes_install_infrastructure`, `test_destroy_removes_sandbox_proxy_and_both_networks` |
+| 101 | **Secrets in proxy logs** | Decisions only, never headers. | `test_proxy_logs_carry_no_request_headers` |
+
 **Sandbox/runtime known limits** — see *Known risks, stated plainly*. Still
-open: registry-only install egress (#61), storage enforcement is poll-based
-(#77), no setuid escalation attempt (#85), and cloud metadata (#60) was not
-reproducible in this environment. Every other isolation claim in rows 52–90
-is backed by a test that drives the real mechanism against a live Docker
-daemon.
+open or residual:
+
+- storage enforcement is periodic (#77);
+- no setuid escalation attempt was made (#85);
+- cloud metadata (#60) isn't reproducible here;
+- the proxy trusts public DNS answers for allowlisted names (#94);
+- the proxy is trusted code.
+
+Every other isolation claim in rows 52–101 is backed by a test that drives the
+real mechanism against a live Docker daemon.
 
 ## Verifying the boundary
 
@@ -311,6 +341,8 @@ python -m pytest tests/redstone/test_runtime_docker_integration.py -q    # Runti
 python -m pytest tests/redstone/test_sandbox_validation.py -q            # run_typecheck/lint/build through the sandbox
 python -m pytest tests/redstone/test_sandbox_hardening.py -q             # 4.1: storage, output, CPU, NNP, devices, fs/network attacks, npm lifecycle
 python -m pytest tests/redstone/test_runtime_hardening.py -q             # 5.1: error wiring, orphan recovery across restart, config bounds
+python -m pytest tests/redstone/test_install_egress.py -q                # 4.2: install egress proxy, real Docker (run alone: it reconciles orphans)
+python -m pytest tests/redstone/test_install_egress_policy.py -q         # 4.2: egress policy + config, unit
 python -m pytest tests/redstone/ -q                        # full suite
 
 # The deterministic core (everything except api/, ai/providers/, and

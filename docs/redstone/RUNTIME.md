@@ -56,8 +56,11 @@ the API is never in one of them. Marked as such in `domain/models.py`.
 ## Startup
 
 1. If the workspace has `package.json`, run `INSTALL_DEPENDENCIES` in an
-   ephemeral sandbox (`NetworkPolicy.INSTALL_ONLY` — a per-sandbox network,
-   see `SANDBOX.md`), destroyed in a `finally`.
+   ephemeral sandbox (`NetworkPolicy.INSTALL_ONLY`: an `--internal` network
+   whose only way out is a per-install egress proxy that allows the configured
+   registry and nothing else — see `SANDBOX.md`), destroyed along with its
+   proxy and networks in a `finally`. If the proxy can't start, the install
+   fails with `RUNTIME_CREATE_FAILED` — there is no fallback network.
 2. Create and start the `START_DEV_SERVER` sandbox (`NetworkPolicy.DENY`).
 3. Poll: check `provider.status()` first (catches a crash — or a quota kill —
    during startup), then probe `http://127.0.0.1:5173` via `exec_in` inside
@@ -116,8 +119,11 @@ never crashes reconciliation.
 **When it runs.** `create_app()` calls it once at startup, whenever it builds
 the default `RuntimeManager` (a fresh process tracks nothing, so everything
 Redstone-owned is an orphan). It's idempotent and can be called again at any
-time. Each orphan's install network (`<sandbox_id>-net`) is removed along with
-it, because the network name is derived from the sandbox id.
+time. Each orphan's install infrastructure — its egress proxy container
+(`<sandbox_id>-proxy`, carrying the same runtime labels) and both networks
+(`<sandbox_id>-net`, `<sandbox_id>-egress`) — is removed along with it,
+because every name is derived from the sandbox id. Proven by
+`test_orphan_recovery_removes_install_infrastructure` (real Docker).
 
 **Proof (real Docker):**
 `test_orphaned_runtime_is_recovered_after_a_simulated_process_restart` —
@@ -220,9 +226,18 @@ unparsable, `NaN`, infinite or out of range **fails closed to the default**
 | `REDSTONE_RUNTIME_STARTUP_SECONDS` | 60 | 5 – 600 |
 | `REDSTONE_RUNTIME_HEALTH_TIMEOUT_SECONDS` | 5 | 1 – 60 |
 | `REDSTONE_RUNTIME_STOP_GRACE_SECONDS` | 10 | 1 – 120 |
+| `REDSTONE_INSTALL_NETWORK_ENABLED` | true | `false`/`0`/`no` → installs get **no network** (never more); anything unrecognised → default |
+| `REDSTONE_INSTALL_REGISTRY_HOSTS` | `registry.npmjs.org` | 1–8 comma-separated DNS names; **all-or-nothing**: one invalid entry (IP, wildcard, URL, port, numeric name) and the default stands |
+| `REDSTONE_INSTALL_PROXY_CONNECT_TIMEOUT_SECONDS` | 10 | 1 – 60 |
+| `REDSTONE_INSTALL_PROXY_MAX_CONNECTIONS` | 32 | 1 – 256 |
+
+**Every registry host an operator adds is additional internet surface
+reachable by arbitrary lifecycle-script code during install.** Add only
+registries you actually install from.
 
 Not configurable at all: the runtime image (a digest-pinned constant), network
-policy, security flags, user, mounts.
+policy, allowed ports (443), IP or wildcard registry entries, security flags,
+user, mounts.
 
 ## Agent integration
 
@@ -269,4 +284,8 @@ reports the active provider and whether it isolates.
 - **Concurrency is proven against the fake provider**, not with concurrent real
   Docker operations.
 - **Inherits every sandbox-layer limitation** in `SANDBOX.md`, notably
-  unrestricted install-phase internet egress and poll-based storage.
+  periodically-enforced storage, resolver trust for allowlisted names, and the
+  egress proxy being trusted code. (Unrestricted install-phase internet egress
+  was closed in Phase 4.2.)
+- **Each install starts its own proxy** (~1.4 s including the sandbox) —
+  simple, strongly isolated, not free.
