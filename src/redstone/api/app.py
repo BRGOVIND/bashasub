@@ -28,6 +28,7 @@ from ..agent.service import AgentService
 from ..runtime.errors import RedstoneRuntimeError, RuntimeErrorCode
 from ..runtime.manager import RuntimeManager
 from ..runtime.models import TERMINAL_RUNTIME_STATES
+from ..sandbox.errors import RedstoneSandboxError
 from ..sandbox.models import ResourceLimits
 from ..sandbox.providers.registry import best_available_provider
 
@@ -84,8 +85,15 @@ def create_app(
                 pids=limits.sandbox_pids,
                 timeout_seconds=limits.max_runtime_timeout,
                 output_bytes=limits.sandbox_output_bytes,
+                storage_mb=limits.sandbox_storage_mb,
             ),
         )
+        # A fresh process tracks no runtimes, so every Redstone-labelled
+        # container still alive is an orphan from a previous process.
+        try:
+            runtime_manager.reconcile_orphaned_containers()
+        except RedstoneSandboxError:
+            pass   # provider unreachable at startup; nothing to reconcile against
     set_runtime_manager(app, runtime_manager)
 
     @app.exception_handler(RedstoneAgentError)

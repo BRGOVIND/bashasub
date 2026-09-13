@@ -8,6 +8,19 @@ __all__ = ["RuntimeErrorCode", "RedstoneRuntimeError"]
 
 
 class RuntimeErrorCode(str, Enum):
+    """Every code below is produced by a real code path as of Phase 5.1,
+    EXCEPT the two marked RESERVED, which no code currently raises and which
+    a client should not expect to see yet:
+
+      * NETWORK_DENIED  -- reserved for an egress proxy rejecting a
+        destination. No such proxy exists; with --network none a blocked
+        connection is indistinguishable, from outside the sandbox, from any
+        other failed command, so there is no honest signal to raise it on.
+      * INVALID_REQUEST -- reserved for request-shape validation.
+        RuntimeManager's inputs are typed and resolved server-side; there is
+        currently nothing a caller can send that reaches it malformed.
+    """
+
     NOT_FOUND = "RUNTIME_NOT_FOUND"
     NOT_OWNED = "RUNTIME_NOT_OWNED"
     BUSY = "RUNTIME_BUSY"

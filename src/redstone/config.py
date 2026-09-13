@@ -33,6 +33,34 @@ def _str_env(name: str, default: str = "") -> str:
     return (os.environ.get(name) or default).strip()
 
 
+def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    """Operator override for a sandbox ceiling. Fails closed: anything
+    unparsable or outside [minimum, maximum] yields the safe default rather
+    than being clamped or honoured -- so a mistyped or malicious value can
+    never widen (or disable) a limit."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return default
+    return value if minimum <= value <= maximum else default
+
+
+def _bounded_float_env(name: str, default: float, minimum: float, maximum: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw.strip())
+    except ValueError:
+        return default
+    if value != value or value in (float("inf"), float("-inf")):   # NaN / inf
+        return default
+    return value if minimum <= value <= maximum else default
+
+
 @dataclass(frozen=True, slots=True)
 class Limits:
     """Resource ceilings. Nothing in Redstone is allowed to be unbounded."""
@@ -58,11 +86,12 @@ class Limits:
     max_tool_argument_size: int = 64 * 1024        # a single string tool argument
     max_search_results: int = 50                   # agent-facing cap, below the raw tool's own
 
-    # Sandbox / runtime (Phase 4/5).
+    # Sandbox / runtime (Phase 4/5; storage + env overrides Phase 4.1).
     sandbox_cpu_cores: float = 1.0
     sandbox_memory_mb: int = 512
     sandbox_pids: int = 128
     sandbox_output_bytes: int = 256 * 1024
+    sandbox_storage_mb: int = 1024
     max_runtime_startup_seconds: float = 60.0      # install + start + first healthy check
     runtime_health_check_timeout_seconds: float = 5.0
     runtime_stop_grace_seconds: float = 10.0
@@ -99,6 +128,34 @@ class Limits:
             ),
             max_search_results=_int_env(
                 "REDSTONE_MAX_SEARCH_RESULTS", d.max_search_results
+            ),
+            # Sandbox ceilings. Bounds are deliberately finite on BOTH sides:
+            # there is no value that means "unlimited", and no value that
+            # turns a limit off. Out-of-range input falls back to the default.
+            sandbox_cpu_cores=_bounded_float_env(
+                "REDSTONE_SANDBOX_CPU_CORES", d.sandbox_cpu_cores, 0.1, 8.0
+            ),
+            sandbox_memory_mb=_bounded_int_env(
+                "REDSTONE_SANDBOX_MEMORY_MB", d.sandbox_memory_mb, 64, 8192
+            ),
+            sandbox_pids=_bounded_int_env(
+                "REDSTONE_SANDBOX_PIDS", d.sandbox_pids, 16, 1024
+            ),
+            sandbox_output_bytes=_bounded_int_env(
+                "REDSTONE_SANDBOX_OUTPUT_BYTES", d.sandbox_output_bytes, 4 * 1024, 4 * 1024 * 1024
+            ),
+            sandbox_storage_mb=_bounded_int_env(
+                "REDSTONE_SANDBOX_STORAGE_MB", d.sandbox_storage_mb, 16, 16 * 1024
+            ),
+            max_runtime_startup_seconds=_bounded_float_env(
+                "REDSTONE_RUNTIME_STARTUP_SECONDS", d.max_runtime_startup_seconds, 5.0, 600.0
+            ),
+            runtime_health_check_timeout_seconds=_bounded_float_env(
+                "REDSTONE_RUNTIME_HEALTH_TIMEOUT_SECONDS",
+                d.runtime_health_check_timeout_seconds, 1.0, 60.0,
+            ),
+            runtime_stop_grace_seconds=_bounded_float_env(
+                "REDSTONE_RUNTIME_STOP_GRACE_SECONDS", d.runtime_stop_grace_seconds, 1.0, 120.0
             ),
         )
 

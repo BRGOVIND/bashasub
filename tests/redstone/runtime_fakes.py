@@ -54,6 +54,8 @@ class FakeSandboxProvider:
 
         self._lock = threading.Lock()
         self._sandboxes: dict[str, dict] = {}
+        self.foreign: dict[str, dict] = {}
+        self.limit_exceeded: dict[str, str] = {}
         self._counter = 0
 
         self.create_calls: list[str] = []
@@ -83,7 +85,7 @@ class FakeSandboxProvider:
             raise self.create_error
         with self._lock:
             self._counter += 1
-            sandbox_id = f"sbx_{self._counter}"
+            sandbox_id = f"redstone-fake{self._counter:08d}"
             self._sandboxes[sandbox_id] = {
                 "state": SandboxState.CREATED, "config": config, "health_calls": 0,
             }
@@ -134,9 +136,18 @@ class FakeSandboxProvider:
     def status(self, sandbox_id: str) -> SandboxStatus:
         with self._lock:
             info = self._sandboxes.get(sandbox_id)
+            exceeded = self.limit_exceeded.get(sandbox_id)
         if info is None:
             return SandboxStatus(sandbox_id=sandbox_id, state=SandboxState.DESTROYED)
-        return SandboxStatus(sandbox_id=sandbox_id, state=info["state"])
+        return SandboxStatus(sandbox_id=sandbox_id, state=info["state"],
+                             resource_limit_exceeded=exceeded)
+
+    def exceed(self, sandbox_id: str, limit: str = "storage_mb") -> None:
+        """Simulate a resource-limit watchdog killing this sandbox."""
+        with self._lock:
+            self.limit_exceeded[sandbox_id] = limit
+            if sandbox_id in self._sandboxes:
+                self._sandboxes[sandbox_id]["state"] = SandboxState.KILLED
 
     def logs(self, sandbox_id: str, max_bytes: int) -> str:
         return "fake sandbox log output"[:max_bytes]
@@ -157,3 +168,24 @@ class FakeSandboxProvider:
         self.destroy_calls.append(sandbox_id)
         with self._lock:
             self._sandboxes.pop(sandbox_id, None)
+            self.foreign.pop(sandbox_id, None)
+
+    # ------------------------------------------------------- orphan support
+
+    def plant(self, sandbox_id: str, labels: dict[str, str]) -> None:
+        """Simulate a container left behind by a previous Redstone process:
+        present on the backend, unknown to any RuntimeManager's memory."""
+        with self._lock:
+            self.foreign[sandbox_id] = {"labels": dict(labels), "state": SandboxState.RUNNING}
+
+    def list_managed(self) -> tuple[dict, ...]:
+        with self._lock:
+            entries = [
+                {"sandbox_id": sid, "labels": dict(info["config"].labels), "state": info["state"].value}
+                for sid, info in self._sandboxes.items()
+            ]
+            entries += [
+                {"sandbox_id": sid, "labels": dict(info["labels"]), "state": info["state"].value}
+                for sid, info in self.foreign.items()
+            ]
+        return tuple(entries)

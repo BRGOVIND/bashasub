@@ -56,16 +56,21 @@ class ProjectStatus(str, Enum):
 
 
 class RuntimeState(str, Enum):
+    """IDLE and EXPIRED are RESERVED: they appear in the transition graph so
+    idle-suspend / TTL expiry can be added without reshaping it, but no code
+    path assigns either today. A runtime observed through the API is never
+    in one of these states."""
+
     CREATED = "created"
     STARTING = "starting"
     RUNNING = "running"
-    IDLE = "idle"
+    IDLE = "idle"            # RESERVED -- never assigned yet
     STOPPING = "stopping"
     STOPPED = "stopped"
     FAILED = "failed"
     KILLED = "killed"
     DESTROYED = "destroyed"
-    EXPIRED = "expired"
+    EXPIRED = "expired"      # RESERVED -- never assigned yet
 
 
 class ChangeKind(str, Enum):
@@ -92,12 +97,16 @@ class EventType(str, Enum):
     RUNTIME_STARTING = "runtime.starting"
     RUNTIME_STARTED = "runtime.started"
     RUNTIME_HEALTH_CHECK = "runtime.health_check"
+    # RESERVED, not emitted: output streaming is not implemented. Runtime
+    # output is available only as bounded logs on request.
     RUNTIME_OUTPUT = "runtime.output"
     RUNTIME_CRASHED = "runtime.crashed"
     RUNTIME_STOPPING = "runtime.stopping"
     RUNTIME_STOPPED = "runtime.stopped"
     RUNTIME_KILLED = "runtime.killed"
     RUNTIME_DESTROYED = "runtime.destroyed"
+    # RESERVED, not emitted by RuntimeManager: failures are reported as
+    # RUNTIME_FAILED (start/lifecycle) or RUNTIME_CRASHED (after RUNNING).
     RUNTIME_ERROR = "runtime.error"
     RUNTIME_FAILED = "runtime.failed"
     PREVIEW_STARTED = "preview.started"

@@ -70,6 +70,7 @@ class SandboxValidationRunner:
             pids=self._resource_limits.pids,
             timeout_seconds=command.max_timeout_seconds,
             output_bytes=self._resource_limits.output_bytes,
+            storage_mb=self._resource_limits.storage_mb,
         )
         config = SandboxConfig(
             mounts=(Mount(project_root, _CONTAINER_PROJECT_PATH, read_only=False),),
@@ -80,6 +81,11 @@ class SandboxValidationRunner:
             # already-installed node_modules.
             network_policy=NetworkPolicy.DENY,
             resource_limits=limits,
+            # No runtime owns a validation sandbox, so it carries no
+            # runtime_id; reconcile_orphaned_containers() treats a surviving
+            # one as an orphan, which is correct -- it is always torn down
+            # in the finally below unless the Redstone process itself died.
+            labels={"redstone.purpose": operation.value},
         )
 
         try:
