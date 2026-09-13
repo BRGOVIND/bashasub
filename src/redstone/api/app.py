@@ -29,7 +29,7 @@ from ..runtime.errors import RedstoneRuntimeError, RuntimeErrorCode
 from ..runtime.manager import RuntimeManager
 from ..runtime.models import TERMINAL_RUNTIME_STATES
 from ..sandbox.errors import RedstoneSandboxError
-from ..sandbox.models import ResourceLimits
+from ..sandbox.models import InstallEgressPolicy, ResourceLimits
 from ..sandbox.providers.registry import best_available_provider
 
 __all__ = ["create_app"]
@@ -87,6 +87,12 @@ def create_app(
                 output_bytes=limits.sandbox_output_bytes,
                 storage_mb=limits.sandbox_storage_mb,
             ),
+            egress_policy=InstallEgressPolicy(
+                allowed_hosts=limits.install_registry_hosts,
+                connect_timeout_seconds=limits.install_proxy_connect_timeout_seconds,
+                max_connections=limits.install_proxy_max_connections,
+            ),
+            install_network_enabled=limits.install_network_enabled,
         )
         # A fresh process tracks no runtimes, so every Redstone-labelled
         # container still alive is an orphan from a previous process.

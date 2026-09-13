@@ -9,6 +9,8 @@ spec). Adding a provider must never require changing this module.
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -61,7 +63,10 @@ class NetworkPolicy(str, Enum):
     """
 
     DENY = "deny"                # no network device at all (Docker --network none)
-    INSTALL_ONLY = "install_only"  # outbound-only, no published ports; dependency install
+    # Dependency install: an --internal network whose only peer is
+    # Redstone's egress proxy, which allows CONNECT to InstallEgressPolicy
+    # hosts and nothing else (Phase 4.2). No direct route anywhere.
+    INSTALL_ONLY = "install_only"
     ALLOWLIST = "allowlist"       # NOT IMPLEMENTED: needs an egress proxy
     FULL = "full"                 # NOT IMPLEMENTED, and deliberately never the default
 
@@ -81,7 +86,7 @@ class ResourceLimits:
     directory and kills the sandbox once it's exceeded. This is real
     enforcement (the untrusted process's own direct writes are what's being
     measured, not anything routed through Redstone's Python file-write path)
-    but it is POLL-ENFORCED, not kernel-instantaneous like memory/pids: a
+    but it is PERIODICALLY ENFORCED, not kernel-instantaneous like memory/pids: a
     fast writer can overshoot the ceiling by up to one poll interval's worth
     of writes before being killed. See docs/redstone/SANDBOX.md.
     """
@@ -102,6 +107,79 @@ class Mount:
     host_path: Path
     container_path: str
     read_only: bool = True
+
+
+_REGISTRY_HOST = re.compile(
+    r"^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
+)
+
+
+def validate_registry_host(host: str) -> str:
+    """A plain DNS name, normalised. Rejects IP literals, numeric-looking
+    names (inet_aton accepts forms like '127.1' or '0x7f.1'), wildcards,
+    userinfo, ports and paths -- an allowlist entry is exactly one host."""
+    if not isinstance(host, str):
+        raise ValueError("registry host must be a string")
+    candidate = host.strip().lower()
+    if candidate.endswith("."):
+        candidate = candidate[:-1]
+    if not _REGISTRY_HOST.match(candidate):
+        raise ValueError(f"invalid registry host: {host!r}")
+    try:
+        ipaddress.ip_address(candidate)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("registry host must be a name, not an IP address")
+    if not re.search(r"[a-z]", candidate.rsplit(".", 1)[-1]):
+        raise ValueError("registry host's top-level label must contain a letter")
+    return candidate
+
+
+@dataclass(frozen=True, slots=True)
+class InstallEgressPolicy:
+    """What an INSTALL_ONLY sandbox may reach -- and nothing else.
+
+    Enforced by Redstone's egress proxy (sandbox/egress_proxy.js), which is
+    the ONLY route out of an install sandbox's --internal network. The
+    default allowlist is the single host npm needs for metadata and
+    tarballs; every additional host an operator configures is additional
+    reachable surface for arbitrary lifecycle-script code.
+    """
+
+    allowed_hosts: tuple[str, ...] = ("registry.npmjs.org",)
+    allowed_ports: tuple[int, ...] = (443,)
+    connect_timeout_seconds: float = 10.0
+    idle_timeout_seconds: float = 60.0
+    max_tunnel_seconds: float = 600.0
+    max_connections: int = 32
+    startup_timeout_seconds: float = 20.0
+
+    def __post_init__(self) -> None:
+        if not self.allowed_hosts or len(self.allowed_hosts) > 16:
+            raise ValueError("allowed_hosts must list 1-16 hosts")
+        object.__setattr__(
+            self, "allowed_hosts", tuple(validate_registry_host(h) for h in self.allowed_hosts)
+        )
+        if not self.allowed_ports or any(
+            not isinstance(p, int) or isinstance(p, bool) or not 1 <= p <= 65535
+            for p in self.allowed_ports
+        ):
+            raise ValueError("allowed_ports must be integers in 1-65535")
+        bounds = (
+            (self.connect_timeout_seconds, 0.5, 120.0, "connect_timeout_seconds"),
+            (self.idle_timeout_seconds, 1.0, 600.0, "idle_timeout_seconds"),
+            (self.max_tunnel_seconds, 1.0, 3600.0, "max_tunnel_seconds"),
+            (self.max_connections, 1, 1024, "max_connections"),
+            (self.startup_timeout_seconds, 1.0, 120.0, "startup_timeout_seconds"),
+        )
+        for value, low, high, name in bounds:
+            if not low <= value <= high:
+                raise ValueError(f"{name} must be within [{low}, {high}]")
+
+    @property
+    def registry_url(self) -> str:
+        return f"https://{self.allowed_hosts[0]}/"
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +207,9 @@ class SandboxConfig:
     # additionally stamps its own "this is Redstone's" marker unconditionally;
     # this dict carries the caller's own project/workspace/runtime ids on top.
     labels: dict[str, str] = field(default_factory=dict)
+    # Only consulted for NetworkPolicy.INSTALL_ONLY. Defaults to the
+    # restrictive npm-registry-only policy.
+    egress: InstallEgressPolicy = field(default_factory=InstallEgressPolicy)
 
     def __post_init__(self) -> None:
         if not self.mounts:

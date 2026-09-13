@@ -27,6 +27,7 @@ described here.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import subprocess
@@ -67,6 +68,15 @@ _BASE_ENV = {
 
 # Upper bound on how long reading a finished container's logs may take.
 _LOG_READ_TIMEOUT_SECONDS = 15.0
+
+# Install egress proxy (Phase 4.2). Redstone-authored, mounted read-only into
+# a container running the same digest-pinned image -- no third-party proxy
+# image, no new supply chain.
+PROXY_SCRIPT = Path(__file__).resolve().parent.parent / "egress_proxy.js"
+_PROXY_CONTAINER_PATH = "/opt/redstone/egress_proxy.js"
+_PROXY_PORT = 3128
+_PROXY_READY = "REDSTONE_EGRESS_PROXY_READY"
+_PROXY_ROLE_LABEL = "redstone.role"
 
 
 def docker_available() -> bool:
@@ -246,9 +256,16 @@ class DockerSandboxProvider:
     name = "docker"
     is_isolated = True   # real namespace/cgroup isolation; see module docstring
 
-    def __init__(self, image: str = DEFAULT_IMAGE, *, storage_poll_interval: float = 1.0) -> None:
+    def __init__(
+        self,
+        image: str = DEFAULT_IMAGE,
+        *,
+        storage_poll_interval: float = 1.0,
+        egress_proxy_script: Path | None = None,
+    ) -> None:
         self._image = image
         self._storage_poll_interval = storage_poll_interval
+        self._proxy_script = Path(egress_proxy_script) if egress_proxy_script else PROXY_SCRIPT
         # Docker remembers the container; it does not remember OUR config.
         # These are the few per-sandbox facts later calls need (output
         # ceiling, storage ceiling + what to measure, watchdog handle).
@@ -291,16 +308,25 @@ class DockerSandboxProvider:
         for mount in config.mounts:
             argv.extend(["--mount", self._mount_arg(mount)])
 
+        # Resolve the command before creating any Docker resource, so an
+        # unsupported operation cannot leave a network or proxy behind.
+        command_argv = list(config.command.resolve())
+        try:
+            network_args, network_env = self._network_args(config, sandbox_id)
+        except RedstoneSandboxError:
+            self._remove_network(sandbox_id)
+            raise
+        argv.extend(network_args)
+
+        # Redstone's proxy settings are applied last so no caller value can
+        # replace them. Enforcement does not depend on them: they only make
+        # legitimate npm traffic find the proxy (see _start_egress_proxy).
         environment = dict(_BASE_ENV)
         environment.update(config.environment)
+        environment.update(network_env)
         for key, value in environment.items():
             argv.extend(["--env", f"{key}={value}"])
 
-        # Resolve the command before creating any Docker resource, so an
-        # unsupported operation cannot leave a network behind.
-        command_argv = list(config.command.resolve())
-        network_args = self._network_args(config, sandbox_id)
-        argv.extend(network_args)
         argv.append(self._image)
         argv.extend(command_argv)
 
@@ -340,51 +366,167 @@ class DockerSandboxProvider:
             )
         return f"{key}={value}"
 
+    # Names are derived from the sandbox id, never stored: after a Redstone
+    # restart destroy() can still find and remove an orphan's proxy and
+    # networks.
     @staticmethod
     def _network_name(sandbox_id: str) -> str:
-        # Derived, not stored: after a Redstone restart destroy() can still
-        # find and remove the network of an orphaned sandbox.
         return f"{sandbox_id}-net"
 
-    def _network_args(self, config: SandboxConfig, sandbox_id: str) -> list[str]:
+    @staticmethod
+    def _egress_network_name(sandbox_id: str) -> str:
+        return f"{sandbox_id}-egress"
+
+    @staticmethod
+    def _proxy_name(sandbox_id: str) -> str:
+        return f"{sandbox_id}-proxy"
+
+    def _network_args(self, config: SandboxConfig, sandbox_id: str) -> tuple[list[str], dict[str, str]]:
         if config.network_policy is NetworkPolicy.DENY:
-            return ["--network", "none"]
+            return ["--network", "none"], {}
         if config.network_policy is NetworkPolicy.INSTALL_ONLY:
-            # A dedicated bridge network per install sandbox, never Docker's
-            # shared default `bridge`. ENFORCED: this container cannot reach
-            # any other container on the machine (Redstone's own or the
-            # user's -- e.g. a local database on the default bridge), and
-            # nothing is published, so nothing can reach IN.
-            # NOT ENFORCED: outbound internet egress is NOT restricted to the
-            # npm registry, and the network's gateway (the host) is routable.
-            # Registry-only egress needs an egress proxy, which does not
-            # exist yet -- a documented gap (SECURITY.md), not a safety claim.
-            name = self._network_name(sandbox_id)
-            result = _run_docker(
-                ["network", "create", "--driver", "bridge",
-                 "--label", f"{MANAGED_LABEL}=true",
-                 "--opt", "com.docker.network.bridge.enable_icc=false",
-                 name],
-                timeout=30,
-            )
-            if result.returncode != 0:
-                raise RedstoneSandboxError(
-                    SandboxErrorCode.CREATE_FAILED,
-                    safe_message="The sandbox network could not be created.",
-                    internal=result.stderr[:500],
-                )
-            return ["--network", name]
+            proxy_url = f"http://{self._start_egress_proxy(config, sandbox_id)}:{_PROXY_PORT}"
+            env = {name: proxy_url for name in (
+                "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
+                "npm_config_proxy", "npm_config_https_proxy",
+            )}
+            env.update({"NO_PROXY": "", "no_proxy": "",
+                        "npm_config_registry": config.egress.registry_url,
+                        "npm_config_update_notifier": "false"})
+            return ["--network", self._network_name(sandbox_id)], env
         raise RedstoneSandboxError(
             SandboxErrorCode.UNSUPPORTED_OPERATION,
             safe_message=f"network policy '{config.network_policy.value}' is not implemented",
         )
 
-    def _remove_network(self, sandbox_id: str) -> None:
-        # Idempotent: most sandboxes (DENY) never had one.
+    def _checked(self, argv: list[str], message: str, timeout: float = 30) -> subprocess.CompletedProcess:
+        result = _run_docker(argv, timeout=timeout)
+        if result.returncode != 0:
+            raise RedstoneSandboxError(
+                SandboxErrorCode.CREATE_FAILED, safe_message=message, internal=result.stderr[:500],
+            )
+        return result
+
+    def _start_egress_proxy(self, config: SandboxConfig, sandbox_id: str) -> str:
+        """Build the install topology and return the proxy's address on it.
+
+            install sandbox --(<id>-net, --internal)--> <id>-proxy --(<id>-egress)--> internet
+
+        `<id>-net` is a Docker --internal network: it has no gateway and no
+        NAT, so nothing on it can reach any address outside it (verified:
+        ENETUNREACH), and Docker's embedded DNS does not resolve external
+        names on it (verified: SERVFAIL), so DNS is not a side channel. Its
+        only members are this sandbox and its own proxy. The proxy is the
+        only container on `<id>-egress`. So the sandbox's entire reachable
+        world is the proxy's CONNECT policy -- whatever it does to
+        HTTP(S)_PROXY, NO_PROXY or npm's registry setting. One proxy per
+        install: no shared infrastructure, no cross-workspace policy.
+
+        Fails closed: any failure raises CREATE_FAILED before the sandbox
+        exists; there is no fallback network.
+        """
+        policy = config.egress
+        internal = self._network_name(sandbox_id)
+        egress = self._egress_network_name(sandbox_id)
+        proxy = self._proxy_name(sandbox_id)
+
+        if not self._proxy_script.is_file():
+            raise RedstoneSandboxError(
+                SandboxErrorCode.CREATE_FAILED,
+                safe_message="The install egress proxy is unavailable.",
+                internal="egress proxy script missing",
+            )
+
+        self._checked(["network", "create", "--internal", "--label", f"{MANAGED_LABEL}=true",
+                       internal], "The sandbox network could not be created.")
+        self._checked(["network", "create", "--driver", "bridge",
+                       "--label", f"{MANAGED_LABEL}=true",
+                       "--opt", "com.docker.network.bridge.enable_icc=false", egress],
+                      "The sandbox egress network could not be created.")
+
+        proxy_env = dict(_BASE_ENV)
+        proxy_env.update({
+            "REDSTONE_EGRESS_ALLOW": ",".join(policy.allowed_hosts),
+            "REDSTONE_EGRESS_PORTS": ",".join(str(p) for p in policy.allowed_ports),
+            "REDSTONE_EGRESS_CONNECT_TIMEOUT_MS": str(int(policy.connect_timeout_seconds * 1000)),
+            "REDSTONE_EGRESS_IDLE_TIMEOUT_MS": str(int(policy.idle_timeout_seconds * 1000)),
+            "REDSTONE_EGRESS_MAX_TUNNEL_MS": str(int(policy.max_tunnel_seconds * 1000)),
+            "REDSTONE_EGRESS_MAX_CONNECTIONS": str(policy.max_connections),
+        })
+        argv = [
+            "create", "--name", proxy,
+            "--security-opt", "no-new-privileges",
+            "--cap-drop", "ALL",
+            "--read-only",
+            "--user", "1000:1000",
+            "--pids-limit", "64",
+            "--memory", "128m", "--memory-swap", "128m",
+            "--cpus", "0.5",
+            "--log-driver", "json-file", "--log-opt", "max-size=1m", "--log-opt", "max-file=1",
+            "--label", f"{MANAGED_LABEL}=true",
+            "--label", f"{_PROXY_ROLE_LABEL}=egress-proxy",
+        ]
+        for key, value in config.labels.items():
+            if key != _PROXY_ROLE_LABEL:
+                argv.extend(["--label", self._label_arg(key, value)])
+        argv.extend(["--network", egress,
+                     "--mount", f"type=bind,source={self._proxy_script},"
+                                f"target={_PROXY_CONTAINER_PATH},readonly"])
+        for key, value in proxy_env.items():
+            argv.extend(["--env", f"{key}={value}"])
+        argv.extend([self._image, "node", _PROXY_CONTAINER_PATH])
+
+        self._checked(argv, "The install egress proxy could not be created.")
+        self._checked(["network", "connect", internal, proxy],
+                      "The install egress proxy could not be attached.")
+        self._checked(["start", proxy], "The install egress proxy could not be started.")
+        self._wait_for_proxy(proxy, policy.startup_timeout_seconds)
+
+        inspected = self._checked(
+            ["inspect", "-f", "{{(index .NetworkSettings.Networks \"" + internal + "\").IPAddress}}",
+             proxy],
+            "The install egress proxy has no address.",
+        )
+        address = inspected.stdout.strip()
         try:
-            _run_docker(["network", "rm", self._network_name(sandbox_id)], timeout=30)
-        except RedstoneSandboxError:
-            pass
+            ipaddress.ip_address(address)
+        except ValueError:
+            raise RedstoneSandboxError(
+                SandboxErrorCode.CREATE_FAILED,
+                safe_message="The install egress proxy has no address.",
+                internal=f"unparsable proxy address {address[:64]!r}",
+            )
+        return address
+
+    def _wait_for_proxy(self, proxy: str, timeout: float) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if _PROXY_READY in _run_docker(["logs", proxy], timeout=15).stdout:
+                return
+            running = _run_docker(["inspect", "-f", "{{.State.Running}}", proxy], timeout=15)
+            if running.stdout.strip() != "true":
+                raise RedstoneSandboxError(
+                    SandboxErrorCode.CREATE_FAILED,
+                    safe_message="The install egress proxy failed to start.",
+                    internal="proxy exited before becoming ready",
+                )
+            time.sleep(0.1)
+        raise RedstoneSandboxError(
+            SandboxErrorCode.CREATE_FAILED,
+            safe_message="The install egress proxy did not become ready.",
+            internal="proxy startup timeout",
+        )
+
+    def _remove_network(self, sandbox_id: str) -> None:
+        """Tear down install infrastructure: proxy, then both networks.
+        Idempotent -- DENY sandboxes never had any of it."""
+        for argv in (["rm", "-f", self._proxy_name(sandbox_id)],
+                     ["network", "rm", self._network_name(sandbox_id)],
+                     ["network", "rm", self._egress_network_name(sandbox_id)]):
+            try:
+                _run_docker(argv, timeout=30)
+            except RedstoneSandboxError:
+                pass
 
     @staticmethod
     def _mount_arg(mount: Mount) -> str:

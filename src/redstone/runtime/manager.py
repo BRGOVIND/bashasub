@@ -28,7 +28,14 @@ from ..domain.models import EventType, Framework, Runtime, RuntimeState, new_id
 from ..events.bus import EventBus
 from ..sandbox.commands import Operation, SandboxCommand
 from ..sandbox.errors import RedstoneSandboxError, SandboxErrorCode
-from ..sandbox.models import Mount, NetworkPolicy, ResourceLimits, SandboxConfig, SandboxState
+from ..sandbox.models import (
+    InstallEgressPolicy,
+    Mount,
+    NetworkPolicy,
+    ResourceLimits,
+    SandboxConfig,
+    SandboxState,
+)
 from ..sandbox.provider import SandboxProvider
 from ..workspace.manager import Workspace
 from .errors import RedstoneRuntimeError, RuntimeErrorCode
@@ -65,6 +72,8 @@ class RuntimeManager:
         stop_grace_seconds: float = 10.0,
         health_poll_interval: float = 1.0,
         resource_limits: ResourceLimits | None = None,
+        egress_policy: InstallEgressPolicy | None = None,
+        install_network_enabled: bool = True,
         event_bus: EventBus | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
@@ -74,6 +83,8 @@ class RuntimeManager:
         self._stop_grace_seconds = stop_grace_seconds
         self._health_poll_interval = health_poll_interval
         self._resource_limits = resource_limits or ResourceLimits()
+        self._egress_policy = egress_policy or InstallEgressPolicy()
+        self._install_network_enabled = install_network_enabled
         self._events = event_bus
         self._logger = logger
 
@@ -217,7 +228,11 @@ class RuntimeManager:
         command = SandboxCommand(Operation.INSTALL_DEPENDENCIES, runtime.framework)
         config = self._build_config(
             runtime, workspace, command,
-            network_policy=NetworkPolicy.INSTALL_ONLY if command.needs_network else NetworkPolicy.DENY,
+            # With install networking disabled the install gets NO network --
+            # never a wider one.
+            network_policy=(NetworkPolicy.INSTALL_ONLY
+                            if command.needs_network and self._install_network_enabled
+                            else NetworkPolicy.DENY),
             timeout_seconds=command.max_timeout_seconds,
         )
         sandbox_id = self._provider.create(config)
@@ -281,6 +296,7 @@ class RuntimeManager:
             environment={"NODE_ENV": "development", "PORT": str(_DEV_SERVER_PORT)},
             network_policy=network_policy,
             resource_limits=limits,
+            egress=self._egress_policy,
             # Opaque ids only. These survive a Redstone restart on the
             # container itself, which is what reconcile_orphaned_containers()
             # reads back.

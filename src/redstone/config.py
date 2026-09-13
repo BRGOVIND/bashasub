@@ -48,6 +48,33 @@ def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int
     return value if minimum <= value <= maximum else default
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = (os.environ.get(name) or "").strip().lower()
+    if raw in ("1", "true", "yes"):
+        return True
+    if raw in ("0", "false", "no"):
+        return False
+    return default
+
+
+def _registry_hosts_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    """Comma-separated install registry hosts. All-or-nothing: if any entry
+    is invalid (an IP, a wildcard, a URL, ...) the whole value is ignored and
+    the restrictive default stands -- a typo must never widen egress, and a
+    partially-applied list would be a surprise either way."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    from .sandbox.models import validate_registry_host   # lazy: config stays import-light
+    entries = [part for part in raw.split(",") if part.strip()]
+    if not entries or len(entries) > 8:
+        return default
+    try:
+        return tuple(dict.fromkeys(validate_registry_host(part) for part in entries))
+    except ValueError:
+        return default
+
+
 def _bounded_float_env(name: str, default: float, minimum: float, maximum: float) -> float:
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
@@ -95,6 +122,13 @@ class Limits:
     max_runtime_startup_seconds: float = 60.0      # install + start + first healthy check
     runtime_health_check_timeout_seconds: float = 5.0
     runtime_stop_grace_seconds: float = 10.0
+
+    # Install egress (Phase 4.2). Disabling install networking makes
+    # installs run with no network at all -- never with more.
+    install_network_enabled: bool = True
+    install_registry_hosts: tuple[str, ...] = ("registry.npmjs.org",)
+    install_proxy_connect_timeout_seconds: float = 10.0
+    install_proxy_max_connections: int = 32
 
     @classmethod
     def from_env(cls) -> Limits:
@@ -156,6 +190,19 @@ class Limits:
             ),
             runtime_stop_grace_seconds=_bounded_float_env(
                 "REDSTONE_RUNTIME_STOP_GRACE_SECONDS", d.runtime_stop_grace_seconds, 1.0, 120.0
+            ),
+            install_network_enabled=_bool_env(
+                "REDSTONE_INSTALL_NETWORK_ENABLED", d.install_network_enabled
+            ),
+            install_registry_hosts=_registry_hosts_env(
+                "REDSTONE_INSTALL_REGISTRY_HOSTS", d.install_registry_hosts
+            ),
+            install_proxy_connect_timeout_seconds=_bounded_float_env(
+                "REDSTONE_INSTALL_PROXY_CONNECT_TIMEOUT_SECONDS",
+                d.install_proxy_connect_timeout_seconds, 1.0, 60.0,
+            ),
+            install_proxy_max_connections=_bounded_int_env(
+                "REDSTONE_INSTALL_PROXY_MAX_CONNECTIONS", d.install_proxy_max_connections, 1, 256
             ),
         )
 

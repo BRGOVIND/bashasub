@@ -34,6 +34,11 @@ dev = ["pytest>=8", "hypothesis>=6"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# The install egress proxy is a Redstone-authored script mounted read-only
+# into its container; it must ship with the package.
+"redstone.sandbox" = ["egress_proxy.js"]
+
 [tool.pytest.ini_options]
 # "." keeps the existing root-level app (main.py, config.py) importable so the
 # security suite and the live /translate endpoint keep working unchanged.
