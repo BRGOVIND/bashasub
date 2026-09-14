@@ -241,6 +241,11 @@ class LocalProcessSandboxProvider:
             self.kill(sandbox_id)
             handle.state = SandboxState.DESTROYED
 
+    def preview_upstream(self, sandbox_id: str) -> None:
+        """Always None: this provider isolates nothing, so Redstone refuses
+        to serve an untrusted preview through it."""
+        return None
+
     # ------------------------------------------------------ list_managed
 
     def list_managed(self) -> tuple[dict, ...]:

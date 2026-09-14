@@ -28,7 +28,10 @@ from ..agent.service import AgentService
 from ..runtime.errors import RedstoneRuntimeError, RuntimeErrorCode
 from ..runtime.manager import RuntimeManager
 from ..runtime.models import TERMINAL_RUNTIME_STATES
+from ..preview.errors import PreviewError, PreviewErrorCode
+from ..preview.manager import PreviewManager
 from ..sandbox.errors import RedstoneSandboxError
+from starlette.concurrency import run_in_threadpool
 from ..sandbox.models import InstallEgressPolicy, ResourceLimits
 from ..sandbox.providers.registry import best_available_provider
 
@@ -54,6 +57,15 @@ _RUNTIME_STATUS_FOR_CODE = {
 }
 
 
+_PREVIEW_STATUS_FOR_CODE = {
+    PreviewErrorCode.NOT_FOUND: 404,
+    PreviewErrorCode.BUSY: 409,
+    PreviewErrorCode.LIMIT_REACHED: 429,
+    PreviewErrorCode.START_FAILED: 502,
+    PreviewErrorCode.UNAVAILABLE: 503,
+}
+
+
 class CreateProjectRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
 
@@ -66,6 +78,7 @@ def create_app(
     service: AgentService | None = None,
     config: RedstoneConfig | None = None,
     runtime_manager: RuntimeManager | None = None,
+    preview_manager: PreviewManager | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Redstone Agent API")
     resolved_config = config or load_config()
@@ -101,6 +114,12 @@ def create_app(
         except RedstoneSandboxError:
             pass   # provider unreachable at startup; nothing to reconcile against
     set_runtime_manager(app, runtime_manager)
+    # The API only REPORTS where a preview lives. Preview content is served
+    # exclusively by the separate gateway app on per-preview origins
+    # (redstone.preview.gateway); nothing under this app's origin proxies it.
+    app.state.preview_manager = preview_manager or PreviewManager(
+        runtime_manager, resolved_config.preview
+    )
 
     @app.exception_handler(RedstoneAgentError)
     async def handle_agent_error(request: Request, exc: RedstoneAgentError):
@@ -110,6 +129,11 @@ def create_app(
     @app.exception_handler(RedstoneRuntimeError)
     async def handle_runtime_error(request: Request, exc: RedstoneRuntimeError):
         status_code = _RUNTIME_STATUS_FOR_CODE.get(exc.code, 500)
+        return JSONResponse(status_code=status_code, content=exc.to_dict())
+
+    @app.exception_handler(PreviewError)
+    async def handle_preview_error(request: Request, exc: PreviewError):
+        status_code = _PREVIEW_STATUS_FOR_CODE.get(exc.code, 500)
         return JSONResponse(status_code=status_code, content=exc.to_dict())
 
     @app.get("/api/health")
@@ -215,5 +239,40 @@ def create_app(
         runtime = _latest_runtime(manager, project_id)
         restarted = manager.restart(runtime.id, project_id, workspace)
         return restarted.to_dict()
+
+    # ---------------------------------------------------------------- preview
+    #
+    # Same conventions as runtime: project_id in the path, workspace resolved
+    # server-side, no request field names a host, port, runtime or path. The
+    # response carries the preview's own origin URL and status -- never the
+    # relay port, its token, a container id or a host path.
+
+    @app.post("/api/projects/{project_id}/preview")
+    async def start_preview(project_id: str, request: Request):
+        svc = get_service(request.app)
+        previews = request.app.state.preview_manager
+        project = svc.get_project(project_id)
+        workspace = svc.get_workspace(project_id)
+        preview = await run_in_threadpool(previews.start, project_id, workspace, project.framework)
+        return previews.describe(preview)
+
+    @app.get("/api/projects/{project_id}/preview")
+    async def get_preview(project_id: str, request: Request):
+        get_service(request.app).get_project(project_id)
+        previews = request.app.state.preview_manager
+        return previews.describe(previews.get_for_project(project_id))
+
+    @app.post("/api/projects/{project_id}/preview/stop")
+    async def stop_preview(project_id: str, request: Request):
+        get_service(request.app).get_project(project_id)
+        previews = request.app.state.preview_manager
+        return previews.describe(await run_in_threadpool(previews.stop, project_id))
+
+    @app.delete("/api/projects/{project_id}/preview")
+    async def destroy_preview(project_id: str, request: Request):
+        get_service(request.app).get_project(project_id)
+        previews = request.app.state.preview_manager
+        destroyed = await run_in_threadpool(previews.destroy, project_id)
+        return {"destroyed": destroyed}
 
     return app

@@ -32,6 +32,7 @@ from ..sandbox.models import (
     InstallEgressPolicy,
     Mount,
     NetworkPolicy,
+    PreviewUpstream,
     ResourceLimits,
     SandboxConfig,
     SandboxState,
@@ -149,6 +150,15 @@ class RuntimeManager:
     def get(self, runtime_id: str, project_id: str) -> Runtime:
         return self._get_owned(runtime_id, project_id)
 
+    def preview_upstream(self, runtime_id: str, project_id: str) -> PreviewUpstream | None:
+        """How the preview gateway reaches this runtime's server, if it is a
+        RUNNING preview runtime on a provider that can isolate one."""
+        runtime = self._get_owned(runtime_id, project_id)
+        if runtime.state is not RuntimeState.RUNNING or not runtime.sandbox_id:
+            return None
+        lookup = getattr(self._provider, "preview_upstream", None)
+        return lookup(runtime.sandbox_id) if lookup else None
+
     def list_for_project(self, project_id: str) -> tuple[Runtime, ...]:
         with self._lock:
             return tuple(r for r in self._runtimes.values() if r.project_id == project_id)
@@ -172,7 +182,11 @@ class RuntimeManager:
 
     # --------------------------------------------------------------- start
 
-    def start(self, runtime_id: str, project_id: str, workspace: Workspace) -> Runtime:
+    def start(self, runtime_id: str, project_id: str, workspace: Workspace, *,
+              preview: bool = False) -> Runtime:
+        """`preview=True` runs the dev server under NetworkPolicy.PREVIEW so
+        Redstone's preview relay can reach it; the default keeps the Phase 5
+        `--network none` server."""
         with self._op_lock(runtime_id):
             runtime = self._get_owned(runtime_id, project_id)
 
@@ -186,7 +200,7 @@ class RuntimeManager:
                 if self._needs_dependencies(workspace):
                     self._run_install(runtime, workspace)
 
-                sandbox_id = self._start_dev_server(runtime, workspace)
+                sandbox_id = self._start_dev_server(runtime, workspace, preview)
                 runtime = self._save(runtime.with_sandbox(sandbox_id, self._provider.name))
 
                 if not self._wait_until_healthy(sandbox_id):
@@ -265,10 +279,12 @@ class RuntimeManager:
                 internal=diagnostics,
             )
 
-    def _start_dev_server(self, runtime: Runtime, workspace: Workspace) -> str:
-        command = SandboxCommand(Operation.START_DEV_SERVER, runtime.framework)
+    def _start_dev_server(self, runtime: Runtime, workspace: Workspace, preview: bool = False) -> str:
+        operation = Operation.START_PREVIEW_SERVER if preview else Operation.START_DEV_SERVER
+        command = SandboxCommand(operation, runtime.framework)
         config = self._build_config(
-            runtime, workspace, command, network_policy=NetworkPolicy.DENY,
+            runtime, workspace, command,
+            network_policy=NetworkPolicy.PREVIEW if preview else NetworkPolicy.DENY,
             timeout_seconds=self._resource_limits.timeout_seconds,
         )
         sandbox_id = self._provider.create(config)
@@ -457,7 +473,8 @@ class RuntimeManager:
 
     # ------------------------------------------------------------- restart
 
-    def restart(self, runtime_id: str, project_id: str, workspace: Workspace) -> Runtime:
+    def restart(self, runtime_id: str, project_id: str, workspace: Workspace, *,
+                preview: bool = False) -> Runtime:
         """Destroy the current generation and start a fresh one for the same
         project/workspace. The runtime_id changes -- see docs/redstone/
         RUNTIME.md "one active runtime + historical generations" for why:
@@ -477,7 +494,7 @@ class RuntimeManager:
 
         new_runtime = self.create(project_id, workspace, framework)
         try:
-            return self.start(new_runtime.id, project_id, workspace)
+            return self.start(new_runtime.id, project_id, workspace, preview=preview)
         except RedstoneRuntimeError:
             # start() already marked new_runtime FAILED and released its
             # slot; nothing is left ambiguously "running".

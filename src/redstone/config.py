@@ -12,10 +12,11 @@ workspace layers without dragging in a web framework.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-__all__ = ["Limits", "AIConfig", "RedstoneConfig", "load_config", "config"]
+__all__ = ["Limits", "AIConfig", "PreviewConfig", "RedstoneConfig", "load_config", "config"]
 
 
 def _int_env(name: str, default: int) -> int:
@@ -254,11 +255,82 @@ class AIConfig:
         )
 
 
+_PREVIEW_DOMAIN = re.compile(
+    r"^(?=.{1,200}$)(?:localhost|[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)$"
+)
+_FRAME_SOURCE = re.compile(r"^(?:'self'|https?://[a-z0-9.-]+(?::[0-9]{1,5})?)$")
+
+
+def _preview_domain_env(name: str, default: str) -> str:
+    raw = (os.environ.get(name) or "").strip().lower().rstrip(".")
+    if not raw:
+        return default
+    if not _PREVIEW_DOMAIN.match(raw) or not re.search(r"[a-z]", raw.rsplit(".", 1)[-1]):
+        return default
+    return raw
+
+
+def _frame_ancestors_env(name: str, default: str) -> str:
+    raw = " ".join((os.environ.get(name) or "").split()).lower()
+    if not raw:
+        return default
+    if raw == "'none'":
+        return raw
+    return raw if all(_FRAME_SOURCE.match(token) for token in raw.split(" ")) else default
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewConfig:
+    """Live preview (Phase 6).
+
+    Each preview is served on its OWN origin: `{scheme}://{id}.{domain}:{port}`.
+    `domain` must therefore be a host that is NOT Redstone's own (and in
+    production a separate registrable domain, ideally on the Public Suffix
+    List) -- see docs/redstone/PREVIEW.md. For local development the default
+    `localhost` gives `pv<id>.localhost`, which browsers resolve to loopback
+    and treat as a different site from Redstone on 127.0.0.1.
+    """
+
+    domain: str = "localhost"
+    scheme: str = "http"
+    public_port: int = 8100            # port in preview URLs; 0 = scheme default
+    listen_port: int = 8100            # where the gateway listens (loopback)
+    max_active: int = 4
+    ready_timeout_seconds: float = 45.0
+    idle_timeout_seconds: float = 1800.0
+    max_lifetime_seconds: float = 14400.0
+    request_timeout_seconds: float = 30.0
+    max_response_seconds: float = 120.0
+    max_request_bytes: int = 1024 * 1024
+    max_response_bytes: int = 32 * 1024 * 1024
+    max_concurrent_requests: int = 32
+    frame_ancestors: str = "'self'"
+
+    @classmethod
+    def from_env(cls) -> PreviewConfig:
+        d = cls()
+        scheme = (os.environ.get("REDSTONE_PREVIEW_SCHEME") or d.scheme).strip().lower()
+        return cls(
+            domain=_preview_domain_env("REDSTONE_PREVIEW_DOMAIN", d.domain),
+            scheme=scheme if scheme in ("http", "https") else d.scheme,
+            public_port=_bounded_int_env("REDSTONE_PREVIEW_PUBLIC_PORT", d.public_port, 1, 65535)
+            if (os.environ.get("REDSTONE_PREVIEW_PUBLIC_PORT") or "").strip() != "0" else 0,
+            listen_port=_bounded_int_env("REDSTONE_PREVIEW_LISTEN_PORT", d.listen_port, 1024, 65535),
+            max_active=_bounded_int_env("REDSTONE_PREVIEW_MAX_ACTIVE", d.max_active, 1, 32),
+            idle_timeout_seconds=_bounded_float_env(
+                "REDSTONE_PREVIEW_IDLE_TIMEOUT_SECONDS", d.idle_timeout_seconds, 60.0, 86400.0
+            ),
+            frame_ancestors=_frame_ancestors_env("REDSTONE_PREVIEW_FRAME_ANCESTORS", d.frame_ancestors),
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class RedstoneConfig:
     workspaces_root: Path = field(default_factory=lambda: Path("workspaces").resolve())
     limits: Limits = field(default_factory=Limits)
     ai: AIConfig = field(default_factory=AIConfig)
+    preview: PreviewConfig = field(default_factory=PreviewConfig)
 
     def public_health(self) -> dict:
         """Health payload. Reports whether things are configured, never what to."""
@@ -284,6 +356,7 @@ def load_config() -> RedstoneConfig:
         workspaces_root=Path(root).resolve() if root else Path("workspaces").resolve(),
         limits=Limits.from_env(),
         ai=AIConfig.from_env(),
+        preview=PreviewConfig.from_env(),
     )
 
 

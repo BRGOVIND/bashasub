@@ -27,6 +27,10 @@ class Operation(str, Enum):
     LINT = "lint"
     BUILD = "build"
     START_DEV_SERVER = "start_dev_server"
+    # Same server, bound to 0.0.0.0 so the preview relay can reach it. Only
+    # ever run under NetworkPolicy.PREVIEW, where the relay is the network's
+    # only other member; START_DEV_SERVER keeps its loopback bind.
+    START_PREVIEW_SERVER = "start_preview_server"
 
 
 # Fixed argv per (framework, operation). Never string-formatted from external
@@ -40,6 +44,10 @@ _TABLE: dict[Framework, dict[Operation, tuple[str, ...]]] = {
         Operation.START_DEV_SERVER: (
             "npm", "run", "dev", "--",
             "--port", "5173", "--strictPort", "--host", "127.0.0.1",
+        ),
+        Operation.START_PREVIEW_SERVER: (
+            "npm", "run", "dev", "--",
+            "--port", "5173", "--strictPort", "--host", "0.0.0.0",
         ),
     },
 }
@@ -57,6 +65,7 @@ MAX_TIMEOUT_SECONDS: dict[Operation, float] = {
     Operation.LINT: 60.0,
     Operation.BUILD: 180.0,
     Operation.START_DEV_SERVER: 30.0,   # time to become healthy, not the server's lifetime
+    Operation.START_PREVIEW_SERVER: 30.0,
 }
 
 

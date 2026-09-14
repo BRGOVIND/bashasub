@@ -19,7 +19,7 @@ from enum import Enum
 __all__ = [
     "ProjectStatus", "RuntimeState", "ChangeKind", "EventType", "Framework",
     "Project", "FileEntry", "FileChange", "ChangeSet", "Snapshot",
-    "Runtime", "Preview", "ErrorModel", "new_id", "utcnow",
+    "Runtime", "Preview", "PreviewStatus", "ErrorModel", "new_id", "utcnow",
 ]
 
 
@@ -109,9 +109,14 @@ class EventType(str, Enum):
     # RUNTIME_FAILED (start/lifecycle) or RUNTIME_CRASHED (after RUNNING).
     RUNTIME_ERROR = "runtime.error"
     RUNTIME_FAILED = "runtime.failed"
+    PREVIEW_CREATED = "preview.created"
+    PREVIEW_STARTING = "preview.starting"
+    # RESERVED, not emitted: superseded by PREVIEW_STARTING / PREVIEW_READY.
     PREVIEW_STARTED = "preview.started"
     PREVIEW_READY = "preview.ready"
     PREVIEW_FAILED = "preview.failed"
+    PREVIEW_STOPPED = "preview.stopped"
+    PREVIEW_DESTROYED = "preview.destroyed"
     SNAPSHOT_CREATED = "snapshot.created"
     SNAPSHOT_RESTORED = "snapshot.restored"
 
@@ -247,18 +252,58 @@ class Runtime:
         }
 
 
+class PreviewStatus(str, Enum):
+    CREATED = "created"
+    STARTING = "starting"
+    READY = "ready"          # the app answered HTTP end to end through the relay
+    STOPPED = "stopped"
+    FAILED = "failed"
+    DESTROYED = "destroyed"
+
+
 @dataclass(frozen=True, slots=True)
 class Preview:
-    """How a running project is reached.
+    """One live preview of a project (Phase 6).
 
-    `path` is a Redstone-controlled route, not a host port. Users never address
-    a runtime's real port directly.
+    `id` is an opaque, high-entropy capability (see redstone.preview.models):
+    it names the preview's own browser origin and is never reused. The relay
+    port and token that actually reach the app are held by PreviewManager
+    only and never appear on this object.
     """
 
+    id: str
     project_id: str
-    runtime_id: str
-    path: str
-    ready: bool = False
+    workspace_id: str
+    runtime_id: str | None = None
+    status: PreviewStatus = PreviewStatus.CREATED
+    last_error: dict | None = None
+    created_at: datetime = field(default_factory=utcnow)
+    last_activity: datetime = field(default_factory=utcnow)
+
+    def with_status(self, status: PreviewStatus) -> Preview:
+        return replace(self, status=status, last_activity=utcnow())
+
+    def with_runtime(self, runtime_id: str | None) -> Preview:
+        return replace(self, runtime_id=runtime_id, last_activity=utcnow())
+
+    def with_error(self, error_code: str, message: str) -> Preview:
+        return replace(self, last_error={"error_code": error_code, "message": message},
+                       last_activity=utcnow())
+
+    def touched(self) -> Preview:
+        return replace(self, last_activity=utcnow())
+
+    def to_dict(self, url: str | None = None) -> dict:
+        """Public view. No workspace or runtime ids, no relay details."""
+        return {
+            "preview_id": self.id,
+            "project_id": self.project_id,
+            "status": self.status.value,
+            "url": url,
+            "last_error": self.last_error,
+            "created_at": self.created_at.isoformat(),
+            "last_activity": self.last_activity.isoformat(),
+        }
 
 
 @dataclass(frozen=True, slots=True)

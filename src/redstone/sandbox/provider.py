@@ -71,6 +71,12 @@ class SandboxProvider(Protocol):
         destroying an already-destroyed or never-created id must not raise."""
         ...
 
+    def preview_upstream(self, sandbox_id: str):
+        """For a NetworkPolicy.PREVIEW sandbox, how Redstone's gateway reaches
+        it (a PreviewUpstream), else None. A provider that cannot isolate a
+        preview returns None, and Redstone then refuses to serve one."""
+        ...
+
     def list_managed(self) -> tuple[dict, ...]:
         """Every sandbox this provider recognises as Redstone-owned, found by
         querying the provider's own backend directly -- NOT from any

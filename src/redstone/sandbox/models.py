@@ -67,6 +67,10 @@ class NetworkPolicy(str, Enum):
     # Redstone's egress proxy, which allows CONNECT to InstallEgressPolicy
     # hosts and nothing else (Phase 4.2). No direct route anywhere.
     INSTALL_ONLY = "install_only"
+    # Live preview (Phase 6): an --internal network whose only other member
+    # is this preview's token-checking relay. No route out, no published port
+    # on the app itself; reachable only as the relay's fixed upstream.
+    PREVIEW = "preview"
     ALLOWLIST = "allowlist"       # NOT IMPLEMENTED: needs an egress proxy
     FULL = "full"                 # NOT IMPLEMENTED, and deliberately never the default
 
@@ -107,6 +111,21 @@ class Mount:
     host_path: Path
     container_path: str
     read_only: bool = True
+
+
+RELAY_TOKEN_HEADER = "x-redstone-relay-token"
+RELAY_STATUS_HEADER = "x-redstone-relay"
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewUpstream:
+    """Where Redstone's preview gateway reaches one preview: the relay's
+    loopback-published port and the secret it demands. Internal only --
+    never serialised to an API response, an event or a log."""
+
+    host: str
+    port: int
+    token: str = field(repr=False)
 
 
 _REGISTRY_HOST = re.compile(

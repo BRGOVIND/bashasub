@@ -37,7 +37,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 # The install egress proxy is a Redstone-authored script mounted read-only
 # into its container; it must ship with the package.
-"redstone.sandbox" = ["egress_proxy.js"]
+"redstone.sandbox" = ["egress_proxy.js", "preview_relay.js"]
 
 [tool.pytest.ini_options]
 # "." keeps the existing root-level app (main.py, config.py) importable so the

@@ -30,6 +30,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import secrets
 import subprocess
 import threading
 import time
@@ -37,7 +38,15 @@ import uuid
 from pathlib import Path
 
 from ..errors import RedstoneSandboxError, SandboxErrorCode
-from ..models import Mount, NetworkPolicy, SandboxConfig, SandboxResult, SandboxState, SandboxStatus
+from ..models import (
+    Mount,
+    NetworkPolicy,
+    PreviewUpstream,
+    SandboxConfig,
+    SandboxResult,
+    SandboxState,
+    SandboxStatus,
+)
 
 __all__ = ["DockerSandboxProvider", "docker_available", "MANAGED_LABEL", "DEFAULT_IMAGE"]
 
@@ -77,6 +86,13 @@ _PROXY_CONTAINER_PATH = "/opt/redstone/egress_proxy.js"
 _PROXY_PORT = 3128
 _PROXY_READY = "REDSTONE_EGRESS_PROXY_READY"
 _PROXY_ROLE_LABEL = "redstone.role"
+
+# Preview relay (Phase 6). Same image, Redstone-authored, mounted read-only.
+RELAY_SCRIPT = Path(__file__).resolve().parent.parent / "preview_relay.js"
+_RELAY_CONTAINER_PATH = "/opt/redstone/preview_relay.js"
+_RELAY_PORT = 8080
+_RELAY_READY = "REDSTONE_PREVIEW_RELAY_READY"
+_RELAY_STARTUP_TIMEOUT_SECONDS = 20.0
 
 
 def docker_available() -> bool:
@@ -262,10 +278,15 @@ class DockerSandboxProvider:
         *,
         storage_poll_interval: float = 1.0,
         egress_proxy_script: Path | None = None,
+        preview_relay_script: Path | None = None,
     ) -> None:
         self._image = image
         self._storage_poll_interval = storage_poll_interval
         self._proxy_script = Path(egress_proxy_script) if egress_proxy_script else PROXY_SCRIPT
+        self._relay_script = Path(preview_relay_script) if preview_relay_script else RELAY_SCRIPT
+        # sandbox_id -> PreviewUpstream. In memory on purpose: after a restart
+        # the tokens are gone, and reconciliation destroys the previews.
+        self._preview_upstreams: dict[str, PreviewUpstream] = {}
         # Docker remembers the container; it does not remember OUR config.
         # These are the few per-sandbox facts later calls need (output
         # ceiling, storage ceiling + what to measure, watchdog handle).
@@ -381,6 +402,14 @@ class DockerSandboxProvider:
     def _proxy_name(sandbox_id: str) -> str:
         return f"{sandbox_id}-proxy"
 
+    @staticmethod
+    def _relay_name(sandbox_id: str) -> str:
+        return f"{sandbox_id}-relay"
+
+    @staticmethod
+    def _publish_network_name(sandbox_id: str) -> str:
+        return f"{sandbox_id}-pub"
+
     def _network_args(self, config: SandboxConfig, sandbox_id: str) -> tuple[list[str], dict[str, str]]:
         if config.network_policy is NetworkPolicy.DENY:
             return ["--network", "none"], {}
@@ -394,6 +423,9 @@ class DockerSandboxProvider:
                         "npm_config_registry": config.egress.registry_url,
                         "npm_config_update_notifier": "false"})
             return ["--network", self._network_name(sandbox_id)], env
+        if config.network_policy is NetworkPolicy.PREVIEW:
+            self._start_preview_relay(config, sandbox_id)
+            return ["--network", self._network_name(sandbox_id)], {}
         raise RedstoneSandboxError(
             SandboxErrorCode.UNSUPPORTED_OPERATION,
             safe_message=f"network policy '{config.network_policy.value}' is not implemented",
@@ -499,30 +531,119 @@ class DockerSandboxProvider:
         return address
 
     def _wait_for_proxy(self, proxy: str, timeout: float) -> None:
+        self._wait_for_marker(proxy, timeout, _PROXY_READY, "install egress proxy")
+
+    def _wait_for_marker(self, name: str, timeout: float, marker: str, what: str) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if _PROXY_READY in _run_docker(["logs", proxy], timeout=15).stdout:
+            if marker in _run_docker(["logs", name], timeout=15).stdout:
                 return
-            running = _run_docker(["inspect", "-f", "{{.State.Running}}", proxy], timeout=15)
+            running = _run_docker(["inspect", "-f", "{{.State.Running}}", name], timeout=15)
             if running.stdout.strip() != "true":
                 raise RedstoneSandboxError(
                     SandboxErrorCode.CREATE_FAILED,
-                    safe_message="The install egress proxy failed to start.",
-                    internal="proxy exited before becoming ready",
+                    safe_message=f"The {what} failed to start.",
+                    internal=f"{what} exited before becoming ready",
                 )
             time.sleep(0.1)
         raise RedstoneSandboxError(
             SandboxErrorCode.CREATE_FAILED,
-            safe_message="The install egress proxy did not become ready.",
-            internal="proxy startup timeout",
+            safe_message=f"The {what} did not become ready.",
+            internal=f"{what} startup timeout",
         )
+
+    def _start_preview_relay(self, config: SandboxConfig, sandbox_id: str) -> None:
+        """Build the preview topology:
+
+            app (sandbox) --(<id>-net, --internal)-- <id>-relay --(<id>-pub)-- 127.0.0.1:<port>
+
+        `<id>-net` has no route out and exactly two members: the app and
+        its relay. The app publishes nothing. The relay's one published
+        port is bound to host loopback and demands a random 256-bit token;
+        its upstream is fixed to this sandbox's own name and port. Fails
+        closed: any failure raises CREATE_FAILED before the app exists.
+        """
+        internal = self._network_name(sandbox_id)
+        publish = self._publish_network_name(sandbox_id)
+        relay = self._relay_name(sandbox_id)
+
+        if not self._relay_script.is_file():
+            raise RedstoneSandboxError(
+                SandboxErrorCode.CREATE_FAILED,
+                safe_message="The preview relay is unavailable.",
+                internal="preview relay script missing",
+            )
+
+        self._checked(["network", "create", "--internal", "--label", f"{MANAGED_LABEL}=true",
+                       internal], "The preview network could not be created.")
+        self._checked(["network", "create", "--driver", "bridge",
+                       "--label", f"{MANAGED_LABEL}=true",
+                       "--opt", "com.docker.network.bridge.enable_icc=false", publish],
+                      "The preview relay network could not be created.")
+
+        token = secrets.token_hex(32)
+        relay_env = dict(_BASE_ENV)
+        relay_env.update({"REDSTONE_RELAY_TOKEN": token, "REDSTONE_RELAY_UPSTREAM": sandbox_id})
+        argv = [
+            "create", "--name", relay,
+            "--security-opt", "no-new-privileges",
+            "--cap-drop", "ALL",
+            "--read-only",
+            "--user", "1000:1000",
+            "--pids-limit", "64",
+            "--memory", "128m", "--memory-swap", "128m",
+            "--cpus", "0.5",
+            "--log-driver", "json-file", "--log-opt", "max-size=1m", "--log-opt", "max-file=1",
+            "--label", f"{MANAGED_LABEL}=true",
+            "--label", f"{_PROXY_ROLE_LABEL}=preview-relay",
+        ]
+        for key, value in config.labels.items():
+            if key != _PROXY_ROLE_LABEL:
+                argv.extend(["--label", self._label_arg(key, value)])
+        argv.extend([
+            "--network", publish,
+            # Host loopback only, random host port: never 0.0.0.0, never a
+            # caller-chosen port.
+            "--publish", f"127.0.0.1::{_RELAY_PORT}",
+            "--mount", f"type=bind,source={self._relay_script},target={_RELAY_CONTAINER_PATH},readonly",
+        ])
+        for key, value in relay_env.items():
+            argv.extend(["--env", f"{key}={value}"])
+        argv.extend([self._image, "node", _RELAY_CONTAINER_PATH])
+
+        self._checked(argv, "The preview relay could not be created.")
+        self._checked(["network", "connect", internal, relay],
+                      "The preview relay could not be attached.")
+        self._checked(["start", relay], "The preview relay could not be started.")
+        self._wait_for_marker(relay, _RELAY_STARTUP_TIMEOUT_SECONDS, _RELAY_READY, "preview relay")
+
+        published = self._checked(["port", relay, f"{_RELAY_PORT}/tcp"],
+                                  "The preview relay has no published port.")
+        port = None
+        for line in published.stdout.splitlines():
+            host, _, value = line.strip().rpartition(":")
+            if host == "127.0.0.1" and value.isdigit():
+                port = int(value)
+                break
+        if port is None or not 1024 <= port <= 65535:
+            raise RedstoneSandboxError(
+                SandboxErrorCode.CREATE_FAILED,
+                safe_message="The preview relay has no published port.",
+                internal="no loopback binding found",
+            )
+        with self._lock:
+            self._preview_upstreams[sandbox_id] = PreviewUpstream("127.0.0.1", port, token)
 
     def _remove_network(self, sandbox_id: str) -> None:
         """Tear down install infrastructure: proxy, then both networks.
         Idempotent -- DENY sandboxes never had any of it."""
+        with self._lock:
+            self._preview_upstreams.pop(sandbox_id, None)
         for argv in (["rm", "-f", self._proxy_name(sandbox_id)],
+                     ["rm", "-f", self._relay_name(sandbox_id)],
                      ["network", "rm", self._network_name(sandbox_id)],
-                     ["network", "rm", self._egress_network_name(sandbox_id)]):
+                     ["network", "rm", self._egress_network_name(sandbox_id)],
+                     ["network", "rm", self._publish_network_name(sandbox_id)]):
             try:
                 _run_docker(argv, timeout=30)
             except RedstoneSandboxError:
@@ -697,6 +818,12 @@ class DockerSandboxProvider:
         text, _truncated = _read_bounded(["logs", sandbox_id], max_bytes,
                                          timeout=_LOG_READ_TIMEOUT_SECONDS)
         return text
+
+    # --------------------------------------------------- preview upstream
+
+    def preview_upstream(self, sandbox_id: str) -> PreviewUpstream | None:
+        with self._lock:
+            return self._preview_upstreams.get(sandbox_id)
 
     # ------------------------------------------------------ list_managed
 
