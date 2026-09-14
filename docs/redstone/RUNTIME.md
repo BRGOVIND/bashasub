@@ -61,7 +61,10 @@ the API is never in one of them. Marked as such in `domain/models.py`.
    registry and nothing else — see `SANDBOX.md`), destroyed along with its
    proxy and networks in a `finally`. If the proxy can't start, the install
    fails with `RUNTIME_CREATE_FAILED` — there is no fallback network.
-2. Create and start the `START_DEV_SERVER` sandbox (`NetworkPolicy.DENY`).
+2. Create and start the `START_DEV_SERVER` sandbox (`NetworkPolicy.DENY`) —
+   or, with `start(..., preview=True)` (Phase 6, used only by
+   `PreviewManager`), the `START_PREVIEW_SERVER` sandbox under
+   `NetworkPolicy.PREVIEW`, plus its token-checking relay. See `PREVIEW.md`.
 3. Poll: check `provider.status()` first (catches a crash — or a quota kill —
    during startup), then probe `http://127.0.0.1:5173` via `exec_in` inside
    the sandbox's own namespace.
@@ -208,6 +211,26 @@ output is bounded logs on request) and `runtime.error` (failures are
 `runtime.failed` / `runtime.crashed`). Marked as reserved in
 `domain/models.py`.
 
+## Previews (Phase 6)
+
+`redstone.preview.PreviewManager` sits on top of `RuntimeManager` and doesn't
+replace it: a preview *is* a runtime started with `preview=True`.
+
+- **What it adds:**
+  - a new 128-bit capability id per start;
+  - READY only after an end-to-end HTTP answer through the relay;
+  - limits on the number of active previews, idle time and lifetime;
+  - the private id → relay map the gateway uses.
+- **Its runtime's containers** — app and relay — carry the usual ownership
+  labels, so orphan reconciliation removes them after a restart.
+- **Events:** `preview.created`, `.starting`, `.ready`, `.failed`, `.stopped`,
+  `.destroyed`, with no preview id in the payload (it's a capability).
+  `preview.started` is RESERVED, not emitted.
+- `RuntimeManager.preview_upstream()` exposes the relay only to
+  `PreviewManager`; no API response includes it.
+
+Full model in `PREVIEW.md`.
+
 ## Operator configuration (Phase 5.1)
 
 Sandbox ceilings can be tuned by the deployment, never by a project, API
@@ -262,6 +285,19 @@ POST /api/projects/{project_id}/runtime/restart
 No request carries a `workspace_id` or `runtime_id`. `GET /api/health`
 reports the active provider and whether it isolates.
 
+Preview (Phase 6), same conventions:
+
+```
+POST   /api/projects/{project_id}/preview
+GET    /api/projects/{project_id}/preview
+POST   /api/projects/{project_id}/preview/stop
+DELETE /api/projects/{project_id}/preview
+```
+
+The API only *reports* a preview's URL. Preview content is served exclusively
+by the separate gateway app, on per-preview origins; `python -m
+redstone.api.serve` runs both.
+
 ## Testing
 
 | File | Tests | Kind |
@@ -270,6 +306,7 @@ reports the active provider and whether it isolates.
 | `test_runtime_api.py` | 12 | fake provider, HTTP |
 | `test_runtime_docker_integration.py` | 4 | real Docker |
 | `test_runtime_hardening.py` | 31 | 30 unit/fake (error wiring, labels, reconcile policy, config bounds), 1 real Docker (restart recovery) |
+| `test_preview_lifecycle.py` | 14 | real Docker: preview lifecycle, failures, sweeps, restart recovery, agent → API → preview |
 
 ## Known limitations
 

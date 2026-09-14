@@ -5,11 +5,10 @@ packages chosen by a user. The whole design follows from treating that code as
 hostile.
 
 > **Status: Phase 2A/2A.1 (filesystem) + 2B (AI gateway) + 3 (coding agent) +
-> 4/5 (sandbox + runtime manager), all implemented and tested.** The
-> browser-facing live preview (Phase 6) is **not yet built**; its rows say so
-> explicitly. Nothing in this document describes a control that does not
-> exist, and every "not yet built" row is honest about being unimplemented
-> rather than a placeholder for something assumed to work.
+> 4/4.1/4.2 (sandbox, hardening, install egress) + 5/5.1 (runtime manager) +
+> 6 (live preview backend), all implemented and tested.** There is no user
+> authentication and no frontend yet; rows that depend on them say so.
+> Nothing in this document describes a control that does not exist.
 
 ## Trust boundary
 
@@ -79,7 +78,7 @@ structurally unreachable from inside the project rather than merely hidden.
 | 18 | **Fabricated change reporting** | Changesets are computed by hashing the filesystem before and after, never from the model's account. Unannounced edits still appear. | `test_changeset_reports_the_real_filesystem_not_a_claim` |
 | 19 | **Arbitrary command execution** | The trusted backend itself still executes nothing (`grep -rn "subprocess" src/redstone/` outside `sandbox/`/`ai/` returns nothing). Execution now exists, but only *inside* the sandbox, and only as one of five fixed named operations (`Operation` enum) resolved through a static `(Framework, Operation) -> argv` table — never a string built from agent output or project content. | `test_dangerous_flags_never_appear_in_the_constructed_argv`; `SandboxCommand.resolve()` unit tests (`UNSUPPORTED_OPERATION` for any framework/operation not in the table) |
 | 20 | **Dependency install on the trusted host** | **Mitigated (Phase 4).** `npm install` runs only inside an ephemeral, network-restricted (`NetworkPolicy.INSTALL_ONLY`) sandbox, destroyed immediately after; it never touches the Redstone process's own filesystem or environment. | `test_real_npm_install_succeeds_over_install_only_network`, `RuntimeManager._run_install` (always `provider.destroy()`s in a `finally`) |
-| 21 | **Preview breakout / XSS** | ⏳ **Not yet built (Phase 6).** Planned: separate origin, sandboxed iframe, CSP. | — |
+| 21 | **Preview breakout / XSS** | **Mitigated (Phase 6):** every preview is served on its own origin, separate from Redstone's, so its JavaScript can't reach Redstone's cookies, storage or API, or another preview. See #102–#121. | `test_preview_browser.py` (real Chrome) |
 | 22 | **SSRF / internal network access from running project code** | **Mitigated (Phase 4).** `NetworkPolicy.DENY` (`--network none`) is the default and the only policy used once the dev server is running — the container has no network device at all, so no address is reachable, internal or otherwise. Install-phase egress (`INSTALL_ONLY`) is, since 4.2, an `--internal` network whose only exit is an egress proxy allowing the npm registry alone — see #61 and #92–#101. | `test_network_deny_blocks_outbound`, `test_full_lifecycle_against_real_docker` |
 | 23 | **Prompt injection from project files** | **Mitigated — see #46 (Phase 3).** This row predates Phase 3; left numbered rather than renumbering the table. | see #46 |
 | 24 | **Provider error leaking credentials** | **Mitigated — see #27 (Phase 2B).** This row predates Phase 2B; left numbered rather than renumbering the table. | see #27 |
@@ -315,6 +314,36 @@ Full detail in `docs/redstone/SANDBOX.md`.
 | 100 | **Orphaned proxies/networks after a restart**; reconciliation touching the wrong things | Proxy carries the owning runtime's labels; destroy removes the proxy and both networks by derived name. | `test_orphan_recovery_removes_install_infrastructure`, `test_destroy_removes_sandbox_proxy_and_both_networks` |
 | 101 | **Secrets in proxy logs** | Decisions only, never headers. | `test_proxy_logs_carry_no_request_headers` |
 
+### Phase 6 live preview
+
+Threat model: the generated app is malicious **and** the browser is untrusted.
+Topology: app —(`<id>-net`, `--internal`)— token-checking relay —(loopback
+publish)— gateway (separate ASGI app) — browser on `pv<id>.<preview domain>`.
+Full detail in `docs/redstone/PREVIEW.md`.
+
+| # | Threat | Mitigation | Test |
+|---|---|---|---|
+| 102 | **Generated app executing on the host / in the API process** | **ENFORCED:** only as a `RuntimeManager` runtime on the Docker provider; previews are refused on a provider that doesn't isolate. | `test_a_provider_that_cannot_isolate_is_refused`, `test_topology_and_hardening` |
+| 103 | **Preview app reaching the internet, private IPs, Docker gateway, metadata, `host.docker.internal`, other previews** | **DOCKER-ENFORCED:** `--internal` network whose only other member is its relay; no external DNS. | `test_preview_app_is_contained` (hostile fixture, 12+ destinations) |
+| 104 | **Preview app exposed directly on the host** | **DOCKER-ENFORCED:** the app publishes nothing; only the relay publishes, on `127.0.0.1`, random port. | `test_topology_and_hardening` |
+| 105 | **Other local processes / containers using the relay** (`host.docker.internal` reaches loopback-published ports — verified) | **GATEWAY-ENFORCED:** per-preview 256-bit token, constant-time compare; wrong or other preview's token → 403. | `test_relay_refuses_requests_without_the_token`, `test_unrelated_container_cannot_use_the_relay_or_reach_the_app` |
+| 106 | **Gateway as an SSRF proxy** (URL in path, arbitrary upstream) | **ENFORCED:** upstream only from server-side session state; a URL in the path is just a path to the same app. | `test_urls_in_the_path_are_just_paths_to_the_same_app` |
+| 107 | **Host / X-Forwarded-Host / Forwarded steering the upstream** | `Host` only selects a session by exact `pv<id>.<domain>` match; forwarding headers ignored and stripped. | `test_forwarding_headers_cannot_steer_or_reach_the_app`, `test_malformed_or_unknown_preview_hosts_are_not_found` |
+| 108 | **Path traversal / encoded traversal / namespace escape** | **GATEWAY-ENFORCED:** refused (400) before forwarding; nothing reaches the app. | `test_traversal_is_refused_before_anything_is_forwarded` (13 forms), `test_unsafe_paths` |
+| 109 | **Cross-preview access / preview-id confusion** | Per-preview origin; 128-bit random ids; `Host` of A never reaches B. | `test_host_selects_only_its_own_preview`, `test_two_workspaces…` (browser: `test_preview_javascript_is_isolated…`) |
+| 110 | **Stale or deleted URL reaching a newer preview** | **ENFORCED:** a new id on every start; old ids resolve to nothing. | `test_stop_then_start_issues_a_new_origin_and_the_old_one_dies`, `test_a_deleted_preview_never_resolves_to_a_later_one` |
+| 111 | **Preview JavaScript reading Redstone cookies/storage or calling its API with ambient credentials** | **BROWSER-ENFORCED** (separate site); session cookie not sent cross-site (SameSite=Lax). | `test_preview_javascript_is_isolated_from_redstone_and_other_previews` (real Chrome) |
+| 112 | **Cookie tossing between previews** | **GATEWAY-ENFORCED** (`Set-Cookie Domain` stripped) + **BROWSER-ENFORCED** in Chrome for JS-set `domain=localhost`. ⚠️ Production needs a PSL-listed preview domain. | same browser test, `test_cookies_lose_their_domain_attribute` |
+| 113 | **Preview reaching into its embedder / hostile postMessage** | **BROWSER-ENFORCED** for DOM/storage; `postMessage` arrives stamped with the preview origin — the future frontend must check it (NOT ENFORCED yet: no frontend). | `test_an_embedded_preview_cannot_reach_into_its_embedder` |
+| 114 | **Unwanted embedding of previews** | CSP `frame-ancestors` (default `'self'`, operator-configurable). | `test_default_frame_ancestors_block_foreign_embedding` |
+| 115 | **Redirects escaping the preview origin** (internal host, metadata, `javascript:`, protocol-relative, unparsable) | **GATEWAY-ENFORCED:** refused (502); self-absolute rewritten to relative. Two crash paths on hostile `Location` found and fixed. | `test_redirects_cannot_leave_the_preview_origin`, `test_hostile_redirects_are_refused_cleanly_never_a_server_error`, `test_redirect_policy` |
+| 116 | **Infrastructure disclosure** (`Server`, `X-Powered-By`, `Via`, container ids, ports, host paths) | Stripped from responses, including the gateway's own `Server`; API responses carry no relay port or token. | `test_infrastructure_headers_are_stripped_and_security_headers_added`, `test_agent_to_preview_end_to_end_through_the_api` |
+| 117 | **Resource abuse through preview** (fork bomb, memory, huge / hanging responses, request floods, body size) | Phase 4 limits (**DOCKER-ENFORCED**) + gateway limits (**GATEWAY-ENFORCED**). | `test_fork_bomb…`, `test_memory_exhaustion_kills_only_the_preview`, `test_oversized_response_is_truncated`, `test_hanging_upstream_times_out`, `test_concurrent_requests_per_preview_are_bounded`, `test_oversized_request_body_is_refused` |
+| 118 | **WebSocket as a tunnel** | Unsupported: refused by gateway and relay. | `test_websocket_upgrades_are_refused_by_gateway_and_relay`, `test_gateway_refuses_websockets` |
+| 119 | **Previews running forever / after deletion** | Destroy kills the container (whole PID namespace) and both networks; idle and lifetime sweeps (**PERIODICALLY ENFORCED**). | `test_destroy_removes_everything_and_is_idempotent`, `test_idle_and_lifetime_limits_stop_previews` |
+| 120 | **Orphaned preview infrastructure after a Redstone restart** | Relay carries runtime labels; reconciliation removes app, relay and networks. | `test_redstone_restart_leaves_no_preview_behind` |
+| 121 | **Capability URL disclosure** | ⚠️ **NOT ENFORCED as user auth:** anyone with the URL can view; no user auth exists yet. Mitigated only by 128-bit ids and `Referrer-Policy: no-referrer`. | — |
+
 **Sandbox/runtime known limits** — see *Known risks, stated plainly*. Still
 open or residual:
 
@@ -343,6 +372,10 @@ python -m pytest tests/redstone/test_sandbox_hardening.py -q             # 4.1: 
 python -m pytest tests/redstone/test_runtime_hardening.py -q             # 5.1: error wiring, orphan recovery across restart, config bounds
 python -m pytest tests/redstone/test_install_egress.py -q                # 4.2: install egress proxy, real Docker (run alone: it reconciles orphans)
 python -m pytest tests/redstone/test_install_egress_policy.py -q         # 4.2: egress policy + config, unit
+python -m pytest tests/redstone/test_preview.py -q                       # 6: preview isolation, real Docker
+python -m pytest tests/redstone/test_preview_browser.py -q               # 6: browser-origin isolation, real Chrome (needs Playwright)
+python -m pytest tests/redstone/test_preview_lifecycle.py -q             # 6: lifecycle/failures/restart (run alone: reconciles)
+python -m pytest tests/redstone/test_preview_gateway.py -q               # 6: gateway/manager policy, unit + stand-in relay
 python -m pytest tests/redstone/ -q                        # full suite
 
 # The deterministic core (everything except api/, ai/providers/, and

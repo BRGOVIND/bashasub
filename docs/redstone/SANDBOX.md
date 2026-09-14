@@ -232,6 +232,30 @@ would gain the proxy's position:
 The proxy is trusted code whose correctness this boundary relies on, and that
 is stated here rather than implied away.
 
+## Preview network (Phase 6)
+
+`NetworkPolicy.PREVIEW`, used only for `START_PREVIEW_SERVER` (the dev
+server bound to `0.0.0.0` inside its own network namespace):
+
+```
+app ── <id>-net (--internal) ── <id>-relay ── <id>-pub (ICC off) ── 127.0.0.1:<random port>
+```
+
+- **The app:** no route out, nothing published, no external DNS. Its only
+  peer is its own relay.
+- **The relay** (`preview_relay.js`):
+  - demands a per-preview 256-bit token — required because other containers
+    can reach loopback-published ports via `host.docker.internal`, which was
+    verified;
+  - forwards only to `<sandbox>:5173`;
+  - refuses `CONNECT` and upgrades;
+  - is hardened like the egress proxy.
+- `destroy()` removes the relay and both networks by derived name.
+  `LocalProcessSandboxProvider.preview_upstream()` always returns `None`, so
+  previews are refused there.
+
+Full model — gateway, browser origins, lifecycle — in `docs/redstone/PREVIEW.md`.
+
 ## Storage
 
 **PERIODICALLY ENFORCED** — the Phase 4.1 watchdog, unchanged. A bind mount
@@ -303,7 +327,8 @@ environment:
 | | `DockerSandboxProvider` | `LocalProcessSandboxProvider` |
 |---|---|---|
 | `is_isolated` | `True` | `False` |
-| Network | `DENY` / proxied `INSTALL_ONLY` | **none of this** — the host's own network |
+| Network | `DENY` / proxied `INSTALL_ONLY` / relayed `PREVIEW` | **none of this** — the host's own network |
+| Live preview | supported (relay topology) | **refused** — `preview_upstream()` is always `None` |
 | `storage_mb` | periodically enforced | not enforced |
 | `list_managed()` | Docker labels | always empty |
 
@@ -315,6 +340,7 @@ environment:
 | `test_sandbox_hardening.py` | 30 | 28 real Docker, 2 static |
 | `test_install_egress.py` | 62 | **all real Docker** (Phase 4.2) |
 | `test_install_egress_policy.py` | 52 | unit (policy validation, config parsing, RuntimeManager network choice) |
+| `test_preview*.py` | 149 | Phase 6 — see `PREVIEW.md` (real Docker, real Chrome, unit, stand-in relay) |
 | `test_sandbox_validation.py` | 8 | 2 real Docker, 6 fake |
 
 Real-Docker tests skip with an explicit reason when no daemon is reachable;
