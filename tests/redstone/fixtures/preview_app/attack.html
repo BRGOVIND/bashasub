@@ -1,0 +1,61 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>hostile preview</title>
+<pre id="out">pending</pre>
+<script>
+// Runs in the PREVIEW's origin. Tries to reach everything a stolen origin
+// would give it: the Redstone origin's cookies, storage and API, another
+// preview, the embedding page, and cookie-tossing onto sibling previews.
+(async () => {
+  const q = new URLSearchParams(location.search);
+  const api = q.get("api");
+  const other = q.get("other");
+  const out = { origin: location.origin };
+
+  // What this origin could see BEFORE writing anything itself: anything here
+  // was put there by some OTHER origin (another preview, or Redstone).
+  out.cookie_before = document.cookie;
+  try { out.marker_before = localStorage.getItem("preview_marker"); } catch (e) { out.marker_before = "ERR " + e.name; }
+
+  // Cookie tossing onto the parent domain, and an ordinary own cookie.
+  try { document.cookie = "tossed_by_js=from-" + location.hostname + "; domain=localhost; path=/"; } catch (e) {}
+  document.cookie = "own=" + location.hostname + "; path=/";
+  try { localStorage.setItem("preview_marker", location.hostname); } catch (e) {}
+
+  out.cookie = document.cookie;
+  try { out.localStorage = Object.keys(localStorage); } catch (e) { out.localStorage = "ERR " + e.name; }
+
+  try {
+    const r = await fetch(api + "/api/secret", { credentials: "include" });
+    out.api_fetch = "READ:" + (await r.text());
+  } catch (e) { out.api_fetch = "BLOCKED:" + e.name; }
+
+  try {
+    const r = await fetch(api + "/api/secret", { credentials: "include", mode: "no-cors" });
+    out.api_no_cors = "RESPONSE_TYPE:" + r.type;
+  } catch (e) { out.api_no_cors = "BLOCKED:" + e.name; }
+
+  try {
+    const r = await fetch(other + "/__whoami", { credentials: "include" });
+    out.other_fetch = "READ:" + (await r.text());
+  } catch (e) { out.other_fetch = "BLOCKED:" + e.name; }
+
+  out.iframe_read = await new Promise((resolve) => {
+    const frame = document.createElement("iframe");
+    frame.src = api + "/";
+    frame.onload = () => {
+      try { resolve("READ:" + frame.contentDocument.cookie); } catch (e) { resolve("BLOCKED:" + e.name); }
+    };
+    document.body.appendChild(frame);
+    setTimeout(() => resolve("TIMEOUT"), 5000);
+  });
+
+  if (window.parent !== window) {
+    try { out.parent_doc = "READ:" + window.parent.document.title; } catch (e) { out.parent_doc = "BLOCKED:" + e.name; }
+    try { out.parent_storage = "READ:" + window.parent.localStorage.length; } catch (e) { out.parent_storage = "BLOCKED:" + e.name; }
+    window.parent.postMessage({ type: "steal-attempt", cookie: document.cookie }, "*");
+  }
+
+  document.getElementById("out").textContent = JSON.stringify(out);
+})();
+</script>

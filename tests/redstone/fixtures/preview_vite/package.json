@@ -1,0 +1,12 @@
+{
+  "name": "redstone-vite-preview-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite"
+  },
+  "devDependencies": {
+    "vite": "6.3.5"
+  }
+}

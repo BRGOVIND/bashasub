@@ -14,7 +14,7 @@ import threading
 import time
 
 from redstone.sandbox.errors import RedstoneSandboxError, SandboxErrorCode
-from redstone.sandbox.models import SandboxResult, SandboxState, SandboxStatus
+from redstone.sandbox.models import NetworkPolicy, SandboxResult, SandboxState, SandboxStatus
 
 __all__ = ["FakeSandboxProvider"]
 
@@ -57,6 +57,9 @@ class FakeSandboxProvider:
         self.foreign: dict[str, dict] = {}
         self.limit_exceeded: dict[str, str] = {}
         self.configs: dict[str, object] = {}   # every config ever created, never popped
+        # What preview_upstream() hands back for PREVIEW sandboxes (tests point
+        # it at a local stand-in relay).
+        self.preview_upstream_value = None
         self._counter = 0
 
         self.create_calls: list[str] = []
@@ -179,6 +182,13 @@ class FakeSandboxProvider:
         present on the backend, unknown to any RuntimeManager's memory."""
         with self._lock:
             self.foreign[sandbox_id] = {"labels": dict(labels), "state": SandboxState.RUNNING}
+
+    def preview_upstream(self, sandbox_id: str):
+        with self._lock:
+            info = self._sandboxes.get(sandbox_id)
+        if info is None or info["config"].network_policy is not NetworkPolicy.PREVIEW:
+            return None
+        return self.preview_upstream_value
 
     def list_managed(self) -> tuple[dict, ...]:
         with self._lock:

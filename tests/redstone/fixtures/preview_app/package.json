@@ -1,0 +1,9 @@
+{
+  "name": "redstone-hostile-preview-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Test fixture: a preview app that behaves like a malicious generated project. Zero dependencies.",
+  "scripts": {
+    "dev": "node server.js"
+  }
+}
