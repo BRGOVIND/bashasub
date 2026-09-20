@@ -369,6 +369,35 @@ def test_failed_restore_swap_preserves_ignored_tree(tmp_path, monkeypatch):
     assert (modules / "index.js").read_text(encoding="utf-8") == "keep me"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows sharing-violation retry")
+@pytest.mark.parametrize("swap_source", ["project", "staging"])
+def test_restore_retries_transient_windows_sharing_violation(tmp_path, monkeypatch, swap_source):
+    ws = WorkspaceManager(tmp_path / "workspaces").create("ws_retry1")
+    original = ws.project_root / "a.txt"
+    original.write_text("before", encoding="utf-8")
+    store = SnapshotStore(ws.root, ws.project_root)
+    snap = store.create("prj")
+    original.write_text("after", encoding="utf-8")
+    rename = Path.rename
+    failures = 0
+
+    def transient_rename(path, target):
+        nonlocal failures
+        if failures == 0 and (
+            (swap_source == "project" and path == ws.project_root)
+            or (swap_source == "staging" and path.name.startswith("staging_"))
+        ):
+            failures += 1
+            raise OSError(5, "Access is denied", None, 5)
+        return rename(path, target)
+
+    monkeypatch.setattr(Path, "rename", transient_rename)
+    assert store.restore(snap.id) == 1
+    assert failures == 1
+    assert original.read_text(encoding="utf-8") == "before"
+    assert not list((ws.root / ".redstone" / "restore").iterdir())
+
+
 # --------------------------------------------------------- snapshot quota
 
 def test_snapshot_count_quota_is_enforced(tmp_path):

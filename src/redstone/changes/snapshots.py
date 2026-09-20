@@ -19,7 +19,9 @@ Standard library only.
 
 from __future__ import annotations
 
+import os
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,6 +44,18 @@ __all__ = ["SnapshotError", "FileState", "capture_state", "diff_states",
 
 class SnapshotError(Exception):
     """A snapshot could not be created or restored."""
+
+
+def _rename_for_restore(source: Path, target: Path) -> None:
+    """Retry transient Windows sharing violations without masking other errors."""
+    for delay in (0.02, 0.05, 0.1, 0.2, None):
+        try:
+            source.rename(target)
+            return
+        except PermissionError as exc:
+            if os.name != "nt" or getattr(exc, "winerror", None) not in (5, 32) or delay is None:
+                raise
+            time.sleep(delay)
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,21 +313,21 @@ class SnapshotStore:
                     for entry in list(self.project_root.iterdir()):
                         if entry.name in IGNORED_DIRECTORIES and entry.is_dir() \
                                 and not is_reparse_point(entry):
-                            entry.rename(staging / entry.name)
+                            _rename_for_restore(entry, staging / entry.name)
                             moved_ignored.append(entry.name)
 
                 if self.project_root.exists():
-                    self.project_root.rename(trash)
-                staging.rename(self.project_root)
+                    _rename_for_restore(self.project_root, trash)
+                _rename_for_restore(staging, self.project_root)
             except Exception:
                 # Best-effort recovery of the original tree and ignored data.
                 if trash.exists() and not self.project_root.exists():
-                    trash.rename(self.project_root)
+                    _rename_for_restore(trash, self.project_root)
                 if self.project_root.is_dir():
                     for name in moved_ignored:
                         carried = staging / name
                         if carried.exists():
-                            carried.rename(self.project_root / name)
+                            _rename_for_restore(carried, self.project_root / name)
                 shutil.rmtree(staging, ignore_errors=True)
                 raise SnapshotError("restore failed during swap; project preserved")
 
