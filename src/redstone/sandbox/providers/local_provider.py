@@ -20,11 +20,9 @@ explicitly untrusted-boundary. `is_isolated` is False specifically so a
 caller can refuse to run it against a real, untrusted, AI-generated project
 without an operator opting in.
 
-Process-tree cleanup here is best-effort (kill the process group on POSIX;
-plain terminate on Windows, where there is no equivalent to a POSIX process
-group without extra job-object plumbing this class does not attempt). This is
-exactly the "advisory, not enforced" limitation Phase 4 requires being named
-rather than glossed over -- see docs/redstone/SANDBOX.md.
+Process-tree cleanup is best-effort: POSIX kills the process group; Windows
+uses taskkill /T. Detached descendants can still escape either mechanism.
+This provider is development-only and never a security boundary.
 """
 
 from __future__ import annotations
@@ -34,9 +32,12 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from io import BufferedReader
+from typing import cast
 
 from ..errors import RedstoneSandboxError, SandboxErrorCode
 from ..models import SandboxConfig, SandboxResult, SandboxState, SandboxStatus
@@ -51,8 +52,10 @@ class _Handle:
     process: subprocess.Popen
     config: SandboxConfig
     state: SandboxState = SandboxState.CREATED
-    log_chunks: list = field(default_factory=list)
+    log_data: bytearray = field(default_factory=bytearray)
     log_bytes: int = 0
+    log_lock: threading.Lock = field(default_factory=threading.Lock)
+    reader: threading.Thread | None = None
 
 
 class LocalProcessSandboxProvider:
@@ -103,49 +106,54 @@ class LocalProcessSandboxProvider:
                 env=dict(config.environment),   # explicit only; no os.environ merge
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
+                text=False,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if not _IS_POSIX else 0,
                 start_new_session=_IS_POSIX,   # POSIX: own process group, for tree-kill
             )
         except OSError as exc:
             raise RedstoneSandboxError(SandboxErrorCode.START_FAILED, internal=str(type(exc)))
 
-        self._handles[sandbox_id] = _Handle(process=process, config=config, state=SandboxState.RUNNING)
+        handle = _Handle(process=process, config=config, state=SandboxState.RUNNING)
+        self._handles[sandbox_id] = handle
+        handle.reader = threading.Thread(target=self._drain_output, args=(handle,), daemon=True)
+        handle.reader.start()
+
+    @staticmethod
+    def _drain_output(handle: _Handle) -> None:
+        assert handle.process.stdout is not None
+        limit = handle.config.resource_limits.output_bytes
+        while chunk := cast(BufferedReader, handle.process.stdout).read1(4096):
+            with handle.log_lock:
+                handle.log_bytes += len(chunk)
+                remaining = limit - len(handle.log_data)
+                if remaining > 0:
+                    handle.log_data.extend(chunk[:remaining])
 
     # --------------------------------------------------------------- wait
 
     def wait(self, sandbox_id: str, timeout: float) -> SandboxResult:
         handle = self._require(sandbox_id)
         started = time.monotonic()
-        output_limit = handle.config.resource_limits.output_bytes
-
         try:
-            assert handle.process.stdout is not None
-            deadline = started + timeout
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise subprocess.TimeoutExpired(handle.process.args, timeout)
-                line = handle.process.stdout.readline()
-                if line == "" and handle.process.poll() is not None:
-                    break
-                if line:
-                    handle.log_bytes += len(line.encode("utf-8", "ignore"))
-                    if handle.log_bytes <= output_limit:
-                        handle.log_chunks.append(line)
-            handle.process.wait(timeout=max(0.0, deadline - time.monotonic()))
+            handle.process.wait(timeout=timeout)
             timed_out = False
         except subprocess.TimeoutExpired:
             timed_out = True
             self.kill(sandbox_id)
+
+        if handle.reader is not None:
+            handle.reader.join(timeout=1)
+        with handle.log_lock:
+            output = bytes(handle.log_data).decode("utf-8", "ignore")
+            truncated = handle.log_bytes > len(handle.log_data)
 
         handle.state = SandboxState.KILLED if timed_out else (
             SandboxState.STOPPED if handle.process.returncode == 0 else SandboxState.FAILED
         )
         return SandboxResult(
             exit_code=handle.process.returncode if not timed_out else None,
-            stdout="".join(handle.log_chunks), stderr="",
-            truncated=handle.log_bytes > output_limit,
+            stdout=output, stderr="",
+            truncated=truncated,
             timed_out=timed_out, duration_seconds=time.monotonic() - started,
         )
 
@@ -158,9 +166,14 @@ class LocalProcessSandboxProvider:
         handle = self._require(sandbox_id)
         mount = handle.config.mounts[0]
         started = time.monotonic()
+        command = list(argv)
+        resolved = shutil.which(command[0])
+        if resolved:
+            command[0] = resolved
         try:
             result = subprocess.run(
-                list(argv), cwd=str(mount.host_path), capture_output=True, text=True,
+                command, cwd=str(mount.host_path), env=dict(handle.config.environment),
+                capture_output=True, text=True,
                 timeout=timeout,
             )
             return SandboxResult(
@@ -196,9 +209,9 @@ class LocalProcessSandboxProvider:
 
     def logs(self, sandbox_id: str, max_bytes: int) -> str:
         handle = self._require(sandbox_id)
-        text = "".join(handle.log_chunks)
-        encoded = text.encode("utf-8", "ignore")
-        return encoded[-max_bytes:].decode("utf-8", "ignore") if len(encoded) > max_bytes else text
+        with handle.log_lock:
+            data = bytes(handle.log_data)
+        return data[-max_bytes:].decode("utf-8", "ignore")
 
     # --------------------------------------------------------------- stop
 
@@ -226,7 +239,15 @@ class LocalProcessSandboxProvider:
             except ProcessLookupError:
                 pass
         else:
-            handle.process.kill()   # best-effort; does not reach orphaned descendants
+            try:
+                result = subprocess.run(
+                    ["taskkill", "/PID", str(handle.process.pid), "/T", "/F"],
+                    capture_output=True, timeout=5,
+                )
+                if result.returncode != 0 and handle.process.poll() is None:
+                    handle.process.kill()
+            except (OSError, subprocess.TimeoutExpired):
+                handle.process.kill()
         try:
             handle.process.wait(timeout=5)
         except subprocess.TimeoutExpired:
@@ -236,9 +257,12 @@ class LocalProcessSandboxProvider:
     # ------------------------------------------------------------ destroy
 
     def destroy(self, sandbox_id: str) -> None:
-        handle = self._handles.pop(sandbox_id, None)
+        getattr(self, "_pending", {}).pop(sandbox_id, None)
+        handle = self._handles.get(sandbox_id)
         if handle is not None and handle.process.poll() is None:
             self.kill(sandbox_id)
+        self._handles.pop(sandbox_id, None)
+        if handle is not None:
             handle.state = SandboxState.DESTROYED
 
     def preview_upstream(self, sandbox_id: str) -> None:
@@ -249,10 +273,8 @@ class LocalProcessSandboxProvider:
     # ------------------------------------------------------ list_managed
 
     def list_managed(self) -> tuple[dict, ...]:
-        """Always empty. Child processes die with the Redstone process that
-        spawned them, so there is nothing to recover after a restart -- and
-        this provider enforces no isolation, including no storage_mb quota,
-        so there is nothing of security value to reconcile either."""
+        """No durable process registry; orphaned children may survive restart.
+        Local execution is development-only and cannot provide cleanup proof."""
         return ()
 
     # ------------------------------------------------------------- helpers

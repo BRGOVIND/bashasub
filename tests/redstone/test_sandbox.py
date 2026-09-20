@@ -26,7 +26,9 @@ from redstone.sandbox.models import (
 )
 from redstone.sandbox.providers.docker_provider import DockerSandboxProvider, docker_available
 from redstone.sandbox.providers.local_provider import LocalProcessSandboxProvider
-from redstone.sandbox.providers.registry import get_sandbox_provider, known_providers
+from redstone.sandbox.providers.registry import (
+    best_available_provider, get_sandbox_provider, known_providers,
+)
 
 DOCKER_UP = docker_available()
 skip_no_docker = pytest.mark.skipif(not DOCKER_UP, reason="Docker daemon not reachable")
@@ -107,6 +109,13 @@ def test_docker_provider_declares_itself_isolated():
     assert DockerSandboxProvider.is_isolated is True
 
 
+def test_missing_docker_never_selects_host_implicitly(monkeypatch):
+    monkeypatch.setattr("redstone.sandbox.providers.registry.docker_available", lambda: False)
+
+    assert isinstance(best_available_provider(), DockerSandboxProvider)
+    assert isinstance(best_available_provider(allow_unsafe_local=True), LocalProcessSandboxProvider)
+
+
 # ============================================================= local process
 
 class TestLocalProcessProvider:
@@ -162,10 +171,42 @@ class TestLocalProcessProvider:
         result = provider.wait(sid, timeout=1)
 
         assert result.timed_out
+        assert result.duration_seconds < 5
         assert result.exit_code is None
         status = provider.status(sid)
         assert status.state == SandboxState.KILLED
         provider.destroy(sid)
+
+    def test_destroy_kills_live_process(self, workspace):
+        provider = LocalProcessSandboxProvider()
+        sid = provider.create(self._config(workspace, ("python", "-c", "import time; time.sleep(30)")))
+        provider.start(sid)
+        process = provider._handles[sid].process
+
+        provider.destroy(sid)
+
+        assert process.poll() is not None
+        assert provider.status(sid).state is SandboxState.DESTROYED
+
+    def test_exec_in_receives_only_explicit_environment(self, workspace, monkeypatch):
+        monkeypatch.setenv("REDSTONE_HOST_SECRET", "MUST_NOT_PASS")
+        provider = LocalProcessSandboxProvider()
+        config = SandboxConfig(
+            mounts=(Mount(workspace, "/w", read_only=False),), working_dir="/w",
+            command=_FixedCommand(("python", "-c", "import time; time.sleep(30)")),
+            environment={"ONLY_ME": "yes"},
+        )
+        sid = provider.create(config)
+        provider.start(sid)
+        try:
+            result = provider.exec_in(
+                sid, ("python", "-c", "import os; print(sorted(os.environ))"), timeout=5,
+            )
+            assert result.exit_code == 0
+            assert "ONLY_ME" in result.stdout
+            assert "REDSTONE_HOST_SECRET" not in result.stdout
+        finally:
+            provider.destroy(sid)
 
     def test_output_is_truncated_past_the_limit(self, workspace):
         provider = LocalProcessSandboxProvider()

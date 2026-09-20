@@ -272,6 +272,10 @@ class DockerSandboxProvider:
     name = "docker"
     is_isolated = True   # real namespace/cgroup isolation; see module docstring
 
+    @property
+    def available(self) -> bool:
+        return docker_available()
+
     def __init__(
         self,
         image: str = DEFAULT_IMAGE,
@@ -793,7 +797,7 @@ class DockerSandboxProvider:
             sandbox_id=sandbox_id,
             state=state,
             exit_code=state_info.get("ExitCode") if not state_info.get("Running") else None,
-            enforced_limits=("cpu_cores", "memory_mb", "pids", "timeout_seconds",
+            enforced_limits=("cpu_cores", "memory_mb", "pids",
                              "output_bytes", "storage_mb"),
             resource_limit_exceeded=self._limit_exceeded(sandbox_id)
             or ("memory_mb" if state_info.get("OOMKilled") else None),

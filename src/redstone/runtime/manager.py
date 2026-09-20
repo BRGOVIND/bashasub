@@ -93,6 +93,7 @@ class RuntimeManager:
         self._runtimes: dict[str, Runtime] = {}
         self._workspace_active: dict[str, str] = {}   # workspace_id -> runtime_id
         self._op_locks: dict[str, threading.Lock] = {}
+        self._expiry_timers: dict[str, threading.Timer] = {}
 
     # ------------------------------------------------------------- lookup
 
@@ -128,6 +129,37 @@ class RuntimeManager:
         with self._lock:
             if self._workspace_active.get(workspace_id) == runtime_id:
                 del self._workspace_active[workspace_id]
+
+    def _cancel_expiry(self, runtime_id: str) -> None:
+        with self._lock:
+            timer = self._expiry_timers.pop(runtime_id, None)
+        if timer is not None:
+            timer.cancel()
+
+    def _arm_expiry(self, runtime: Runtime) -> None:
+        timer = threading.Timer(
+            self._resource_limits.timeout_seconds,
+            self._expire_runtime,
+            args=(runtime.id, runtime.project_id),
+        )
+        timer.daemon = True
+        with self._lock:
+            self._expiry_timers[runtime.id] = timer
+        timer.start()
+
+    def _expire_runtime(self, runtime_id: str, project_id: str) -> None:
+        try:
+            current = self._get_owned(runtime_id, project_id)
+            if current.state is not RuntimeState.RUNNING:
+                return
+            stopped = self.kill(runtime_id, project_id)
+            if stopped.state is RuntimeState.KILLED:
+                self._save(stopped.with_error(
+                    RuntimeErrorCode.TIMEOUT.value, "The runtime exceeded its lifetime limit."
+                ))
+        except (RedstoneRuntimeError, RedstoneSandboxError):
+            # Keep the workspace lease held on cleanup failure; destroy() can retry.
+            return
 
     def _emit(self, event_type: EventType, runtime_id: str, *, project_id: str | None = None,
               **payload) -> None:
@@ -166,6 +198,11 @@ class RuntimeManager:
     # -------------------------------------------------------------- create
 
     def create(self, project_id: str, workspace: Workspace, framework: Framework) -> Runtime:
+        if not getattr(self._provider, "available", True):
+            raise RedstoneRuntimeError(
+                RuntimeErrorCode.CREATE_FAILED,
+                safe_message="The isolated sandbox provider is unavailable.",
+            )
         with self._lock:
             existing = self._workspace_active.get(workspace.id)
             if existing is not None:
@@ -206,6 +243,7 @@ class RuntimeManager:
                 if not self._wait_until_healthy(sandbox_id):
                     exceeded = self._provider.status(sandbox_id).resource_limit_exceeded
                     self._safe_teardown(sandbox_id)
+                    self._save(self._get(runtime.id).with_sandbox(None, None))
                     if exceeded:
                         raise RedstoneRuntimeError(
                             RuntimeErrorCode.RESOURCE_LIMIT,
@@ -214,24 +252,29 @@ class RuntimeManager:
                     raise RedstoneRuntimeError(RuntimeErrorCode.HEALTHCHECK_FAILED)
 
             except RedstoneRuntimeError as exc:
+                runtime = self._get(runtime.id)
                 runtime = self._save(
                     transition(runtime, RuntimeState.FAILED).with_error(exc.code.value, exc.safe_message)
                 )
-                self._release_slot(runtime.workspace_id, runtime.id)
+                if runtime.sandbox_id is None:
+                    self._release_slot(runtime.workspace_id, runtime.id)
                 self._emit(EventType.RUNTIME_FAILED, runtime.id, error_code=exc.code.value)
                 raise
             except RedstoneSandboxError as exc:
+                runtime = self._get(runtime.id)
                 code = _SANDBOX_TO_RUNTIME_ERROR.get(exc.code, RuntimeErrorCode.START_FAILED)
                 wrapped = RedstoneRuntimeError(code, safe_message=exc.safe_message,
                                                internal=exc.internal)
                 runtime = self._save(
                     transition(runtime, RuntimeState.FAILED).with_error(code.value, exc.safe_message)
                 )
-                self._release_slot(runtime.workspace_id, runtime.id)
+                if runtime.sandbox_id is None:
+                    self._release_slot(runtime.workspace_id, runtime.id)
                 self._emit(EventType.RUNTIME_FAILED, runtime.id, error_code=code.value)
                 raise wrapped from exc
 
-            runtime = self._save(transition(runtime, RuntimeState.RUNNING))
+            runtime = self._save(transition(self._get(runtime.id), RuntimeState.RUNNING))
+            self._arm_expiry(runtime)
             self._emit(EventType.RUNTIME_STARTED, runtime.id)
             return runtime
 
@@ -250,11 +293,13 @@ class RuntimeManager:
             timeout_seconds=command.max_timeout_seconds,
         )
         sandbox_id = self._provider.create(config)
+        self._save(self._get(runtime.id).with_sandbox(sandbox_id, self._provider.name))
         try:
             self._provider.start(sandbox_id)
             result = self._provider.wait(sandbox_id, timeout=command.max_timeout_seconds)
         finally:
             self._provider.destroy(sandbox_id)
+            self._save(self._get(runtime.id).with_sandbox(None, None))
 
         diagnostics = (result.stdout[-1000:] + result.stderr[-1000:])
         if result.resource_limit_exceeded:
@@ -288,7 +333,13 @@ class RuntimeManager:
             timeout_seconds=self._resource_limits.timeout_seconds,
         )
         sandbox_id = self._provider.create(config)
-        self._provider.start(sandbox_id)
+        self._save(self._get(runtime.id).with_sandbox(sandbox_id, self._provider.name))
+        try:
+            self._provider.start(sandbox_id)
+        except Exception:
+            self._provider.destroy(sandbox_id)
+            self._save(self._get(runtime.id).with_sandbox(None, None))
+            raise
         return sandbox_id
 
     def _build_config(
@@ -392,9 +443,21 @@ class RuntimeManager:
             else:
                 code = RuntimeErrorCode.HEALTHCHECK_FAILED
                 message = "The runtime process is no longer responding."
+            if current.sandbox_id:
+                try:
+                    self._safe_teardown(current.sandbox_id)
+                except RedstoneSandboxError:
+                    self._save(
+                        transition(current, RuntimeState.FAILED).with_error(
+                            RuntimeErrorCode.DESTROY_FAILED.value,
+                            "The failed runtime could not be cleaned up.",
+                        )
+                    )
+                    return  # keep workspace lease until destroy() succeeds
             updated = self._save(
                 transition(current, RuntimeState.FAILED).with_error(code.value, message)
             )
+            self._cancel_expiry(updated.id)
             self._release_slot(updated.workspace_id, updated.id)
             self._emit(EventType.RUNTIME_CRASHED, updated.id, diagnostics_bytes=len(diagnostics))
 
@@ -414,17 +477,19 @@ class RuntimeManager:
             if runtime.state in TERMINAL_RUNTIME_STATES:
                 return runtime   # idempotent
 
-            runtime = self._save(transition(runtime, RuntimeState.STOPPING))
             self._emit(EventType.RUNTIME_STOPPING, runtime.id)
 
             if runtime.sandbox_id:
                 try:
                     self._provider.stop(runtime.sandbox_id, timeout=self._stop_grace_seconds)
+                    self._provider.destroy(runtime.sandbox_id)
                 except RedstoneSandboxError as exc:
                     raise RedstoneRuntimeError(RuntimeErrorCode.STOP_FAILED,
                                                safe_message=exc.safe_message) from exc
 
+            runtime = self._save(transition(runtime, RuntimeState.STOPPING))
             runtime = self._save(transition(runtime, RuntimeState.STOPPED))
+            self._cancel_expiry(runtime.id)
             self._release_slot(runtime.workspace_id, runtime.id)
             self._emit(EventType.RUNTIME_STOPPED, runtime.id)
             return runtime
@@ -439,8 +504,10 @@ class RuntimeManager:
 
             if runtime.sandbox_id:
                 self._provider.kill(runtime.sandbox_id)
+                self._provider.destroy(runtime.sandbox_id)
 
             runtime = self._save(transition(runtime, RuntimeState.KILLED))
+            self._cancel_expiry(runtime.id)
             self._release_slot(runtime.workspace_id, runtime.id)
             self._emit(EventType.RUNTIME_KILLED, runtime.id)
             return runtime
@@ -468,6 +535,7 @@ class RuntimeManager:
                                                safe_message=exc.safe_message) from exc
 
             runtime = self._save(transition(runtime, RuntimeState.DESTROYED))
+            self._cancel_expiry(runtime.id)
             self._release_slot(runtime.workspace_id, runtime.id)
             self._emit(EventType.RUNTIME_DESTROYED, runtime.id)
 

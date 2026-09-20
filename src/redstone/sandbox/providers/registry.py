@@ -34,11 +34,14 @@ def get_sandbox_provider(name: str):
     return factory()
 
 
-def best_available_provider():
-    """Docker if the daemon is actually reachable right now, else the
-    explicitly-unisolated local process provider. Both providers declare
-    `.is_isolated`; callers that need a real security boundary must check it
-    rather than assume this function chose safely for them."""
+def best_available_provider(*, allow_unsafe_local: bool = False):
+    """Select Docker by default, even when its daemon is unavailable.
+
+    Host execution requires an explicit development-only opt-in from the
+    composition root. A missing Docker daemon never selects it automatically.
+    """
     if docker_available():
         return DockerSandboxProvider()
-    return LocalProcessSandboxProvider()
+    if allow_unsafe_local:
+        return LocalProcessSandboxProvider()
+    return DockerSandboxProvider()

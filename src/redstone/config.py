@@ -331,6 +331,8 @@ class RedstoneConfig:
     limits: Limits = field(default_factory=Limits)
     ai: AIConfig = field(default_factory=AIConfig)
     preview: PreviewConfig = field(default_factory=PreviewConfig)
+    environment: str = "production"
+    allow_unsafe_local_execution: bool = False
 
     def public_health(self) -> dict:
         """Health payload. Reports whether things are configured, never what to."""
@@ -352,11 +354,14 @@ class RedstoneConfig:
 
 def load_config() -> RedstoneConfig:
     root = _str_env("REDSTONE_WORKSPACES_ROOT")
+    environment = _str_env("REDSTONE_ENV", "production").lower()
     return RedstoneConfig(
         workspaces_root=Path(root).resolve() if root else Path("workspaces").resolve(),
         limits=Limits.from_env(),
         ai=AIConfig.from_env(),
         preview=PreviewConfig.from_env(),
+        environment="development" if environment == "development" else "production",
+        allow_unsafe_local_execution=_bool_env("REDSTONE_UNSAFE_LOCAL_EXECUTION", False),
     )
 
 

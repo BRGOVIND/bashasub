@@ -17,7 +17,8 @@ import pytest
 from redstone.domain.models import Framework, RuntimeState
 from redstone.runtime.errors import RedstoneRuntimeError, RuntimeErrorCode
 from redstone.runtime.manager import RuntimeManager
-from redstone.sandbox.models import SandboxState
+from redstone.sandbox.errors import RedstoneSandboxError, SandboxErrorCode
+from redstone.sandbox.models import ResourceLimits, SandboxState
 from redstone.workspace.manager import WorkspaceManager
 from runtime_fakes import FakeSandboxProvider
 
@@ -190,14 +191,90 @@ def test_operations_reject_the_wrong_project_id(tmp_path):
 
 # --------------------------------------------------------------------- stop
 
+def test_start_failure_after_create_destroys_sandbox(tmp_path):
+    class FailingStart(FakeSandboxProvider):
+        def start(self, sandbox_id):
+            raise RedstoneSandboxError(SandboxErrorCode.START_FAILED)
+
+    provider = FailingStart()
+    manager = _manager(provider)
+    workspace = _workspace(tmp_path)
+    runtime = manager.create(PROJECT_ID, workspace, Framework.REACT_VITE_TS)
+
+    with pytest.raises(RedstoneRuntimeError):
+        manager.start(runtime.id, PROJECT_ID, workspace)
+
+    assert provider.live_sandbox_ids() == set()
+    assert provider.destroy_calls == provider.create_calls
+    assert manager.create(PROJECT_ID, workspace, Framework.REACT_VITE_TS)
+
+
+@pytest.mark.parametrize("failure_point", ["install", "dev_start", "health"])
+def test_start_teardown_failure_retains_sandbox_and_workspace_lease(tmp_path, failure_point):
+    class FailingDestroy(FakeSandboxProvider):
+        def start(self, sandbox_id):
+            if failure_point == "dev_start":
+                raise RedstoneSandboxError(SandboxErrorCode.START_FAILED)
+            super().start(sandbox_id)
+
+        def destroy(self, sandbox_id):
+            raise RedstoneSandboxError(SandboxErrorCode.DESTROY_FAILED)
+
+    provider = FailingDestroy(never_healthy=failure_point == "health")
+    manager = _manager(provider, max_startup_seconds=0.05, health_poll_interval=0.01)
+    workspace = _workspace(tmp_path, with_package_json=failure_point == "install")
+    runtime = manager.create(PROJECT_ID, workspace, Framework.REACT_VITE_TS)
+
+    with pytest.raises(RedstoneRuntimeError):
+        manager.start(runtime.id, PROJECT_ID, workspace)
+
+    failed = manager.get(runtime.id, PROJECT_ID)
+    assert failed.state is RuntimeState.FAILED
+    assert failed.sandbox_id in provider.live_sandbox_ids()
+    with pytest.raises(RedstoneRuntimeError) as caught:
+        manager.create(PROJECT_ID, workspace, Framework.REACT_VITE_TS)
+    assert caught.value.code is RuntimeErrorCode.BUSY
+
+
+def test_stop_failure_keeps_runtime_retryable_and_lease_held(tmp_path):
+    class FailingOnceStop(FakeSandboxProvider):
+        def __init__(self):
+            super().__init__()
+            self.fail_once = True
+
+        def stop(self, sandbox_id, timeout):
+            if self.fail_once:
+                self.fail_once = False
+                raise RedstoneSandboxError(SandboxErrorCode.STOP_FAILED)
+            super().stop(sandbox_id, timeout)
+
+    provider = FailingOnceStop()
+    manager = _manager(provider)
+    workspace = _workspace(tmp_path)
+    runtime = manager.create(PROJECT_ID, workspace, Framework.REACT_VITE_TS)
+    manager.start(runtime.id, PROJECT_ID, workspace)
+
+    with pytest.raises(RedstoneRuntimeError):
+        manager.stop(runtime.id, PROJECT_ID)
+
+    assert manager.get(runtime.id, PROJECT_ID).state is RuntimeState.RUNNING
+    with pytest.raises(RedstoneRuntimeError) as caught:
+        manager.create(PROJECT_ID, workspace, Framework.REACT_VITE_TS)
+    assert caught.value.code is RuntimeErrorCode.BUSY
+    assert manager.stop(runtime.id, PROJECT_ID).state is RuntimeState.STOPPED
+    assert provider.live_sandbox_ids() == set()
+
+
 def test_stop_transitions_to_stopped_and_frees_the_slot(tmp_path):
-    manager = _manager()
+    provider = FakeSandboxProvider()
+    manager = _manager(provider)
     workspace = _workspace(tmp_path)
     runtime = manager.create(PROJECT_ID, workspace, Framework.REACT_VITE_TS)
     manager.start(runtime.id, PROJECT_ID, workspace)
 
     stopped = manager.stop(runtime.id, PROJECT_ID)
     assert stopped.state is RuntimeState.STOPPED
+    assert provider.live_sandbox_ids() == set()
 
     # Slot freed -> a new runtime can be created for the same workspace.
     again = manager.create(PROJECT_ID, workspace, Framework.REACT_VITE_TS)
@@ -312,6 +389,26 @@ def test_list_for_project_only_returns_that_projects_runtimes(tmp_path):
 
 
 # ---------------------------------------------------------------- crashes
+
+def test_runtime_lifetime_timer_kills_and_releases_sandbox(tmp_path):
+    provider = FakeSandboxProvider()
+    manager = _manager(provider, resource_limits=ResourceLimits(timeout_seconds=0.1))
+    workspace = _workspace(tmp_path)
+    runtime = manager.create(PROJECT_ID, workspace, Framework.REACT_VITE_TS)
+    manager.start(runtime.id, PROJECT_ID, workspace)
+
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        if manager.get(runtime.id, PROJECT_ID).state is RuntimeState.KILLED:
+            break
+        time.sleep(0.02)
+
+    expired = manager.get(runtime.id, PROJECT_ID)
+    assert expired.state is RuntimeState.KILLED
+    assert expired.last_error["error_code"] == RuntimeErrorCode.TIMEOUT.value
+    assert provider.live_sandbox_ids() == set()
+    assert manager.create(PROJECT_ID, workspace, Framework.REACT_VITE_TS)
+
 
 def test_health_check_detects_a_crashed_sandbox(tmp_path):
     provider = FakeSandboxProvider()
