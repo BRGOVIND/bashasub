@@ -6,12 +6,16 @@ FakeAIGateway. No network call happens in this file.
 
 from __future__ import annotations
 
+import httpx
 from fastapi.testclient import TestClient
 
 from agent_fakes import FakeAIGateway, action
 from redstone.agent.service import AgentService
+from redstone.ai.gateway import AIGateway
 from redstone.api.app import create_app
 from redstone.config import AIConfig, Limits, RedstoneConfig
+from redstone.runtime.manager import RuntimeManager
+from runtime_fakes import FakeSandboxProvider
 
 
 def _client(tmp_path, gateway=None, **limit_overrides):
@@ -183,3 +187,55 @@ def test_no_endpoint_exposes_ai_credentials(tmp_path):
         assert "api_key" not in body
         assert "authorization" not in body
         assert "bearer" not in body
+
+
+def test_byok_reaches_provider_header_but_not_task_events_or_workspace(tmp_path):
+    secret = "TEST_BYOK_SECRET_9f8a7c6b5d4e"
+    seen = []
+
+    def upstream(request):
+        seen.append(request)
+        return httpx.Response(200, json={
+            "candidates": [{"content": {"parts": [{"text": action("complete", summary="done")}]}}]
+        })
+
+    config = RedstoneConfig(
+        workspaces_root=tmp_path / "workspaces", ai=AIConfig(api_key="", max_retries=0),
+    )
+    gateway = AIGateway(config.ai, transport=httpx.MockTransport(upstream))
+    service = AgentService(config, gateway=gateway)
+    client = TestClient(create_app(
+        service=service, config=config, runtime_manager=RuntimeManager(FakeSandboxProvider()),
+    ))
+    project = client.post("/api/projects", json={"name": "Demo"}).json()
+
+    response = client.post(f"/api/projects/{project['project_id']}/agent", json={
+        "message": "Say done",
+        "byok": {"provider": "gemini", "model": "gemini-2.0-flash", "api_key": secret},
+    })
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert len(seen) == 1
+    assert seen[0].headers["x-goog-api-key"] == secret
+    task_id = response.json()["task_id"]
+    assert secret not in client.get(f"/api/agent/tasks/{task_id}").text
+    assert secret not in client.get(f"/api/agent/tasks/{task_id}/events").text
+    assert secret not in repr(service.get_task(task_id))
+    workspace = service.get_workspace(project["project_id"])
+    assert all(secret not in path.read_text(encoding="utf-8", errors="ignore")
+               for path in workspace.root.rglob("*") if path.is_file())
+
+
+def test_invalid_byok_length_returns_safe_error(tmp_path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "Demo"}).json()
+    secret = "S" * 4097
+
+    response = client.post(f"/api/projects/{project['project_id']}/agent", json={
+        "message": "Say done",
+        "byok": {"provider": "gemini", "model": "m", "api_key": secret},
+    })
+
+    assert response.status_code == 400
+    assert secret not in response.text

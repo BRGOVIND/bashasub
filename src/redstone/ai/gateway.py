@@ -86,6 +86,15 @@ class AIGateway:
         model_name = model or request.model or self._config.model
         byok = byok_key is not None
 
+        if byok and (
+            not isinstance(byok_key, str) or not 8 <= len(byok_key) <= 4096
+            or not isinstance(model_name, str) or not 1 <= len(model_name) <= 128
+            or (base_url is not None and (
+                not isinstance(base_url, str) or not 1 <= len(base_url) <= 2048
+            ))
+        ):
+            raise RedstoneAIError(AIErrorCode.INVALID_REQUEST, request_id=request_id)
+
         if byok and provider_name not in BYOK_PROVIDERS:
             raise RedstoneAIError(
                 AIErrorCode.INVALID_REQUEST,
@@ -129,13 +138,16 @@ class AIGateway:
                     max_response_bytes=self._config.max_response_bytes,
                     transport=self._transport,
                 )
+                if credential.reveal() in response.text:
+                    raise RedstoneAIError(AIErrorCode.PROVIDER_ERROR, request_id=request_id)
                 self._log(provider_name, model, request_id, "ok",
-                          time.monotonic() - started, attempt, None)
+                          time.monotonic() - started, attempt, None, credential.reveal())
                 return response
             except RedstoneAIError as exc:
                 last = exc
                 self._log(provider_name, model, request_id,
-                          "error", time.monotonic() - started, attempt, exc.code)
+                          "error", time.monotonic() - started, attempt, exc.code,
+                          credential.reveal())
                 # Stop immediately on anything not worth retrying (auth, invalid
                 # request/model, too-large), or once attempts are exhausted.
                 if not exc.retryable or attempt == attempts - 1:
@@ -153,20 +165,19 @@ class AIGateway:
 
     # ------------------------------------------------------------------- log
 
-    def _log(self, provider, model, request_id, status, duration, attempt, code) -> None:
+    def _log(self, provider, model, request_id, status, duration, attempt, code,
+             credential_value) -> None:
         if self._logger is None:
             return
-        # Only safe scalar fields. No prompt, no response, no credential. The
-        # credential value never appears here, but redact() is applied to the
-        # code as belt-and-braces in case an adapter ever builds a custom
-        # message from upstream text.
-        api_key = self._config.api_key
-        self._logger.info(
+        # Model names are caller-supplied in BYOK mode, so redact the whole
+        # record with both the live request key and any server-configured key.
+        record = (
             "ai_request "
             f"request_id={request_id} provider={provider} model={model} "
             f"status={status} duration_ms={int(duration * 1000)} attempt={attempt} "
-            f"error_code={redact(code.value if code else '-', api_key)}"
+            f"error_code={code.value if code else '-'}"
         )
+        self._logger.info(redact(record, credential_value, self._config.api_key))
 
 
 def _with_id(request: AIRequest, request_id: str) -> AIRequest:

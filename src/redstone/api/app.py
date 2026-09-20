@@ -17,6 +17,8 @@ docs/redstone/AGENT.md, not hidden.
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -25,9 +27,11 @@ from ..config import RedstoneConfig, load_config
 from .service_provider import get_runtime_manager, get_service, set_runtime_manager, set_service
 from ..agent.errors import AgentErrorCode, RedstoneAgentError
 from ..agent.service import AgentService
+from ..agent.byok import EphemeralBYOK
 from ..runtime.errors import RedstoneRuntimeError, RuntimeErrorCode
 from ..runtime.manager import RuntimeManager
 from ..runtime.models import TERMINAL_RUNTIME_STATES
+from ..runtime.validation import SandboxValidationRunner
 from ..preview.errors import PreviewError, PreviewErrorCode
 from ..preview.manager import PreviewManager
 from ..sandbox.errors import RedstoneSandboxError
@@ -72,6 +76,7 @@ class CreateProjectRequest(BaseModel):
 
 class AgentRequest(BaseModel):
     message: str = Field(min_length=1, max_length=20_000)
+    byok: Any = None
 
 
 def create_app(
@@ -82,24 +87,29 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI(title="Redstone Agent API")
     resolved_config = config or load_config()
-    set_service(app, service or AgentService(resolved_config))
+    limits = resolved_config.limits
+    sandbox_limits = ResourceLimits(
+        cpu_cores=limits.sandbox_cpu_cores,
+        memory_mb=limits.sandbox_memory_mb,
+        pids=limits.sandbox_pids,
+        timeout_seconds=limits.max_runtime_timeout,
+        output_bytes=limits.sandbox_output_bytes,
+        storage_mb=limits.sandbox_storage_mb,
+    )
 
     if runtime_manager is None:
-        provider = best_available_provider()
-        limits = resolved_config.limits
+        provider = best_available_provider(
+            allow_unsafe_local=(
+                resolved_config.environment == "development"
+                and resolved_config.allow_unsafe_local_execution
+            )
+        )
         runtime_manager = RuntimeManager(
             provider,
             max_startup_seconds=limits.max_runtime_startup_seconds,
             health_check_timeout=limits.runtime_health_check_timeout_seconds,
             stop_grace_seconds=limits.runtime_stop_grace_seconds,
-            resource_limits=ResourceLimits(
-                cpu_cores=limits.sandbox_cpu_cores,
-                memory_mb=limits.sandbox_memory_mb,
-                pids=limits.sandbox_pids,
-                timeout_seconds=limits.max_runtime_timeout,
-                output_bytes=limits.sandbox_output_bytes,
-                storage_mb=limits.sandbox_storage_mb,
-            ),
+            resource_limits=sandbox_limits,
             egress_policy=InstallEgressPolicy(
                 allowed_hosts=limits.install_registry_hosts,
                 connect_timeout_seconds=limits.install_proxy_connect_timeout_seconds,
@@ -114,6 +124,13 @@ def create_app(
         except RedstoneSandboxError:
             pass   # provider unreachable at startup; nothing to reconcile against
     set_runtime_manager(app, runtime_manager)
+    provider = runtime_manager.provider
+    validation_runner = (
+        SandboxValidationRunner(provider, resource_limits=sandbox_limits)
+        if getattr(provider, "is_isolated", False) and getattr(provider, "available", True)
+        else None
+    )
+    set_service(app, service or AgentService(resolved_config, validation_runner=validation_runner))
     # The API only REPORTS where a preview lives. Preview content is served
     # exclusively by the separate gateway app on per-preview origins
     # (redstone.preview.gateway); nothing under this app's origin proxies it.
@@ -140,12 +157,13 @@ def create_app(
     async def health():
         manager = get_runtime_manager(app)
         provider = manager.provider
+        available = getattr(provider, "available", True)
         return {
             "status": "ok",
             "runtime": {
                 "provider": provider.name,
-                # Never claim isolation the environment cannot actually enforce.
-                "isolated": getattr(provider, "is_isolated", False),
+                "available": available,
+                "isolated": available and getattr(provider, "is_isolated", False),
             },
         }
 
@@ -162,7 +180,8 @@ def create_app(
     @app.post("/api/projects/{project_id}/agent")
     async def start_agent_task(project_id: str, payload: AgentRequest, request: Request):
         svc = get_service(request.app)
-        task = svc.start_task(project_id, payload.message)
+        byok = EphemeralBYOK.from_payload(payload.byok) if payload.byok is not None else None
+        task = svc.start_task(project_id, payload.message, byok=byok)
         return {"task_id": task.id, "status": task.status.value}
 
     @app.get("/api/agent/tasks/{task_id}")

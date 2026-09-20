@@ -24,6 +24,7 @@ from ..domain.models import EventType, Framework, Project, ProjectStatus
 from ..events.bus import Event, EventBus
 from ..workspace.manager import Workspace, WorkspaceManager
 from .errors import AgentErrorCode, RedstoneAgentError
+from .byok import EphemeralBYOK
 from .loop import run_agent_task
 from .models import AgentStatus, AgentTask
 from .tools.registry import ToolContext, ToolRegistry, default_registry
@@ -113,7 +114,8 @@ class AgentService:
 
     # --------------------------------------------------------------- tasks
 
-    def start_task(self, project_id: str, message: str, *, background: bool = False) -> AgentTask:
+    def start_task(self, project_id: str, message: str, *, background: bool = False,
+                   byok: EphemeralBYOK | None = None) -> AgentTask:
         """Create and run a task for `project_id`.
 
         `background=False` (the default, and what the HTTP API uses in Phase 3)
@@ -176,6 +178,7 @@ class AgentService:
                     on_update=self._record_update,
                     on_event=self._record_event(project.id, task.id),
                     is_cancelled=cancel_event.is_set,
+                    byok=byok,
                 )
             except Exception as exc:  # noqa: BLE001 - setup failure before the loop's own safety net
                 final_task = task.with_status(AgentStatus.FAILED).with_error(

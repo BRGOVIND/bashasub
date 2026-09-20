@@ -23,6 +23,7 @@ from ..changes.snapshots import SnapshotStore, capture_state, diff_states
 from ..config import Limits
 from ..domain.models import ChangeKind, EventType, new_id
 from .context import build_ai_messages, render_tool_result
+from .byok import EphemeralBYOK
 from .errors import AgentErrorCode
 from .models import AgentMessage, AgentStatus, AgentStep, AgentTask, StepType
 from .tools.registry import ToolContext, ToolRegistry
@@ -105,6 +106,7 @@ def run_agent_task(
     on_update: Callable[[AgentTask], None] = lambda t: None,
     on_event: Callable[[EventType, dict], None] = lambda e, p: None,
     is_cancelled: Callable[[], bool] = lambda: False,
+    byok: EphemeralBYOK | None = None,
 ) -> AgentTask:
     """Run `task` to completion, failure, cancellation or its iteration/time
     limit. Returns the final AgentTask; never raises for a normal AI or tool
@@ -150,7 +152,15 @@ def run_agent_task(
             request = AIRequest(messages=ai_messages, request_id=task.id)
 
             try:
-                response = gateway.generate(request)
+                response = gateway.generate(
+                    request,
+                    **({
+                        "provider": byok.provider,
+                        "model": byok.model,
+                        "byok_key": byok.credential.reveal(),
+                        "base_url": byok.base_url,
+                    } if byok is not None else {}),
+                )
             except RedstoneAIError as exc:
                 task = task.with_step(
                     AgentStep.create(StepType.ERROR, {"error_code": exc.code.value})
@@ -226,6 +236,7 @@ def _handle_tool_call(
     on_event: Callable[[EventType, dict], None],
 ) -> tuple[AgentTask, bool]:
     """Execute one tool call. Returns (updated_task, is_terminal)."""
+    assert action.tool is not None and action.arguments is not None
     call_id = new_id("call")
     task = task.with_step(
         AgentStep.create(StepType.TOOL_CALL, {"call_id": call_id, "tool": action.tool})
@@ -236,6 +247,11 @@ def _handle_tool_call(
     if is_validation:
         on_event(EventType.AGENT_VALIDATION_STARTED, {"task_id": task.id, "tool": action.tool})
     on_event(EventType.AGENT_TOOL_STARTED, {"task_id": task.id, "tool": action.tool})
+
+    if kind == "mutate" and task.snapshot_id is None:
+        snapshot = snapshot_store.create(task.project_id, label=f"before task {task.id}")
+        task = task.with_snapshot(snapshot.id)
+        on_event(EventType.SNAPSHOT_CREATED, {"task_id": task.id, "snapshot_id": snapshot.id})
 
     result = registry.call(call_id, action.tool, action.arguments, context)
 
@@ -261,11 +277,6 @@ def _handle_tool_call(
     if task.status != target_status:
         task = task.with_status(target_status)
 
-    if kind == "mutate" and result.ok and task.snapshot_id is None:
-        snapshot = snapshot_store.create(task.project_id, label=f"before task {task.id}")
-        task = task.with_snapshot(snapshot.id)
-        on_event(EventType.SNAPSHOT_CREATED, {"task_id": task.id, "snapshot_id": snapshot.id})
-
     result_text = render_tool_result(
         action.tool,
         {"ok": result.ok, "output": result.output, "error_code": result.error_code,
@@ -283,7 +294,7 @@ def _handle_completion(
     before_state,
     on_event: Callable[[EventType, dict], None],
 ) -> AgentTask:
-    after_state = capture_state(context.workspace.project_root)
+    after_state = capture_state(context.workspace.project_root, context.limits)
     changeset = diff_states(
         before_state, after_state, context.workspace.project_root,
         project_id=task.project_id, task_id=task.id, reason=action.summary or "",

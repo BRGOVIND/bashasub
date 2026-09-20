@@ -13,8 +13,11 @@ from fastapi.testclient import TestClient
 from agent_fakes import FakeAIGateway, action
 from redstone.agent.service import AgentService
 from redstone.api.app import create_app
+from redstone.api.service_provider import get_service
+from redstone.agent.tools.validation import UnavailableValidationRunner
 from redstone.config import AIConfig, Limits, RedstoneConfig
 from redstone.runtime.manager import RuntimeManager
+from redstone.runtime.validation import SandboxValidationRunner
 from runtime_fakes import FakeSandboxProvider
 
 
@@ -175,3 +178,55 @@ def test_health_reports_the_runtime_provider_honestly(tmp_path):
     body = response.json()
     assert body["runtime"]["provider"] == "fake"
     assert body["runtime"]["isolated"] is False   # FakeSandboxProvider never claims isolation
+
+
+def test_default_api_rejects_runtime_creation_without_docker(tmp_path, monkeypatch):
+    monkeypatch.setattr("redstone.sandbox.providers.registry.docker_available", lambda: False)
+    monkeypatch.setattr("redstone.sandbox.providers.docker_provider.docker_available", lambda: False)
+    config = RedstoneConfig(workspaces_root=tmp_path / "workspaces")
+    service = AgentService(config, gateway=FakeAIGateway([action("complete", summary="done")]))
+    client = TestClient(create_app(service=service, config=config))
+    project = _project(client)
+
+    health = client.get("/api/health").json()["runtime"]
+    response = client.post(f"/api/projects/{project['project_id']}/runtime")
+
+    assert health["provider"] == "docker"
+    assert health["available"] is False
+    assert health["isolated"] is False
+    assert response.status_code == 500
+    assert response.json()["error_code"] == "RUNTIME_CREATE_FAILED"
+
+
+def test_local_execution_requires_development_and_explicit_opt_in(tmp_path, monkeypatch):
+    monkeypatch.setattr("redstone.sandbox.providers.registry.docker_available", lambda: False)
+    monkeypatch.setattr("redstone.sandbox.providers.docker_provider.docker_available", lambda: False)
+    for environment, enabled, expected in [
+        ("production", True, "docker"),
+        ("development", False, "docker"),
+        ("development", True, "local_process"),
+    ]:
+        config = RedstoneConfig(
+            workspaces_root=tmp_path / f"{environment}-{enabled}",
+            environment=environment,
+            allow_unsafe_local_execution=enabled,
+        )
+        service = AgentService(config, gateway=FakeAIGateway([action("complete", summary="done")]))
+        client = TestClient(create_app(service=service, config=config))
+        runtime = client.get("/api/health").json()["runtime"]
+        assert runtime["provider"] == expected
+        assert runtime["isolated"] is False
+
+
+def test_validation_runner_wired_only_for_available_isolated_provider(tmp_path):
+    config = RedstoneConfig(workspaces_root=tmp_path / "workspaces")
+    isolated = FakeSandboxProvider()
+    isolated.is_isolated = True
+    app = create_app(config=config, runtime_manager=RuntimeManager(isolated))
+    assert isinstance(get_service(app)._validation_runner, SandboxValidationRunner)
+
+    unavailable = FakeSandboxProvider()
+    unavailable.is_isolated = True
+    unavailable.available = False
+    app = create_app(config=config, runtime_manager=RuntimeManager(unavailable))
+    assert isinstance(get_service(app)._validation_runner, UnavailableValidationRunner)

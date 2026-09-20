@@ -24,8 +24,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..agent.tools.validation import ValidationResult, ValidationStatus
 from ..domain.models import Framework
+from ..domain.validation import ValidationResult, ValidationStatus
 from ..sandbox.commands import Operation, SandboxCommand
 from ..sandbox.errors import RedstoneSandboxError
 from ..sandbox.models import Mount, NetworkPolicy, ResourceLimits, SandboxConfig

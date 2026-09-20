@@ -20,30 +20,14 @@ into without changing this module, the registry, or the agent loop.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
+from ...domain.validation import ValidationResult, ValidationStatus
 from .specs import ToolContext, ToolSpec  # noqa: F401 (ToolContext used in type hints below)
 
 __all__ = ["ValidationStatus", "ValidationResult", "ValidationRunner",
            "UnavailableValidationRunner", "TOOL_SPECS"]
-
-
-class ValidationStatus:
-    PASSED = "passed"
-    FAILED = "failed"
-    UNAVAILABLE = "unavailable"
-
-
-@dataclass(frozen=True, slots=True)
-class ValidationResult:
-    status: str          # one of ValidationStatus
-    message: str
-    output: str = ""      # truncated tool output, if any was actually produced
-
-    def to_dict(self) -> dict:
-        return {"status": self.status, "message": self.message, "output": self.output}
 
 
 class ValidationRunner(Protocol):
@@ -78,7 +62,7 @@ class UnavailableValidationRunner:
 
 
 def _runner(context: "ToolContext") -> ValidationRunner:
-    return context.validation_runner or UnavailableValidationRunner()
+    return cast(ValidationRunner, context.validation_runner) if context.validation_runner else UnavailableValidationRunner()
 
 
 def _handle_typecheck(context: "ToolContext", arguments: dict) -> dict:

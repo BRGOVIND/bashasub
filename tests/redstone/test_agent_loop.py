@@ -250,6 +250,25 @@ def test_snapshot_is_created_lazily_on_first_mutation_only(env):
     assert final.snapshot_id is not None
 
 
+def test_first_mutation_snapshot_restores_original_after_failure(env):
+    ws, _, _, _, store = env
+    original = ws.project_root / "A.ts"
+    original.write_text("original", encoding="utf-8")
+    gateway = FakeAIGateway(
+        [action("tool_call", tool="write_file",
+                arguments={"path": "A.ts", "content": "modified"})],
+        default=action("tool_call", tool="list_files", arguments={}),
+    )
+
+    final, _ = _run(env, gateway)
+
+    assert final.status == AgentStatus.TIMED_OUT
+    assert original.read_text(encoding="utf-8") == "modified"
+    assert final.snapshot_id is not None
+    store.restore(final.snapshot_id)
+    assert original.read_text(encoding="utf-8") == "original"
+
+
 def test_read_only_task_creates_no_snapshot(env):
     gateway = FakeAIGateway([
         action("tool_call", tool="list_files", arguments={}),
