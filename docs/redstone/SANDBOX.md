@@ -21,11 +21,11 @@ below is labelled:
 | **ENVIRONMENT LIMITATION** | Can't be reproduced on this development machine. |
 | **RESERVED** | Declared for later; nothing uses it. |
 
-> **Environment.** Built and tested against a real Docker daemon (Docker
-> Desktop 29.4.1, WSL2 backend — a genuine Linux kernel), never assumed.
-> Without a daemon, `best_available_provider()` falls back to
-> `LocalProcessSandboxProvider`, which isolates **nothing**
-> (`is_isolated = False`); `/api/health` says which one is active.
+> **Environment.** Earlier isolation tests ran against a real Docker daemon,
+> but the current P0 changes have not been retested against one. Without a
+> daemon, production execution fails closed. `LocalProcessSandboxProvider`
+> requires explicit development-only unsafe opt-in and isolates **nothing**
+> (`is_isolated = False`); `/api/health` reports availability and isolation.
 
 ## Architecture
 

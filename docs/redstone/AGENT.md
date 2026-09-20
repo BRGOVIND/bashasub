@@ -248,8 +248,8 @@ the code or with a real end-to-end call, not inferred:
 | Cause cross-project access? | No | One `ToolContext` per task, pinned to one workspace; `AgentTask` has no method to change it |
 | Repository content override system instructions? | No | System prompt always message zero; see Prompt-injection defence |
 | Tool results override system instructions? | No | Same; tool results are role `user`, labelled, never role `system` |
-| Force a different AI provider? | No | Directly verified: `gateway.generate(request)` in the loop passes no `provider`/`model`/`byok_key`/`base_url` argument at all |
-| Access the BYOK key? | No | The loop never calls `Credential.reveal()`; that only happens inside the two provider adapters, verified by grep |
+| Force a different AI provider? | No | The API caller selects a constrained per-task BYOK provider/model; model-generated tool actions cannot change it |
+| Access the BYOK key? | No tool access | The loop forwards the request-scoped credential to the gateway, but never puts it in the action envelope, tool context, task record or events |
 | Logs contain project secrets? | No | Gateway logs only safe scalars (Phase 2B); the agent loop logs nothing of its own beyond what `on_event` payloads carry |
 | Agent events contain secrets? | No | Every `on_event` payload in `loop.py` is `task_id` plus small scalars (tool name, `ok`, ids, a reason string) — no file content, no credentials |
 
