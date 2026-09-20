@@ -144,7 +144,8 @@ def file_hash(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _walk(root: Path, limits: Limits):
+def _walk(root: Path, limits: Limits, *, include_ignored: bool = False,
+          respect_depth: bool = True):
     """Yield (absolute_path, depth) for real files under root.
 
     Two rules that matter for security and correctness:
@@ -165,13 +166,13 @@ def _walk(root: Path, limits: Limits):
         current_path = Path(current)
         depth = len(current_path.parts) - root_depth
 
-        if depth >= limits.max_directory_depth:
+        if respect_depth and depth >= limits.max_directory_depth:
             directories[:] = []
             continue
 
         kept = []
         for name in directories:
-            if depth == 0 and name in IGNORED_DIRECTORIES:
+            if depth == 0 and name in IGNORED_DIRECTORIES and not include_ignored:
                 continue
             if is_reparse_point(current_path / name):
                 continue
@@ -186,12 +187,13 @@ def _walk(root: Path, limits: Limits):
 
 
 def project_size(workspace_root: Path) -> tuple[int, int]:
-    """(total bytes, file count) for the project, ignoring excluded trees."""
+    """(total bytes, file count) for all project files, including ignored trees."""
     total = 0
     count = 0
     limits = Limits()
 
-    for path, _ in _walk(Path(workspace_root), limits):
+    for path, _ in _walk(Path(workspace_root), limits,
+                         include_ignored=True, respect_depth=False):
         try:
             total += path.stat().st_size
             count += 1
@@ -211,6 +213,7 @@ def list_files(workspace_root: Path, limits: Limits | None = None) -> tuple[File
         if len(entries) >= limits.max_files:
             break
         try:
+            assert_safe_to_read(path)
             entries.append(
                 FileEntry(
                     path=relative_to_workspace(path, root),
@@ -219,7 +222,7 @@ def list_files(workspace_root: Path, limits: Limits | None = None) -> tuple[File
                     modified_at=_modified(path),
                 )
             )
-        except (OSError, PathSecurityError):
+        except (OSError, PathSecurityError, UnsafeFileError):
             continue
 
     return tuple(sorted(entries, key=lambda entry: entry.path))
@@ -247,6 +250,8 @@ def list_directory(
         if child.is_dir() and child.name in IGNORED_DIRECTORIES:
             continue
         try:
+            if child.is_file():
+                assert_safe_to_read(child)
             entries.append(
                 FileEntry(
                     path=relative_to_workspace(child, root),
@@ -255,7 +260,7 @@ def list_directory(
                     modified_at=_modified(child),
                 )
             )
-        except (OSError, PathSecurityError):
+        except (OSError, PathSecurityError, UnsafeFileError):
             continue
 
     return tuple(entries)
@@ -339,7 +344,8 @@ def write_file(
             # file, or the write could land on shared or external bytes.
             assert_safe_to_write(path)
 
-        existing = path.stat().st_size if path.exists() and path.is_file() else 0
+        is_new = not path.exists()
+        existing = path.stat().st_size if not is_new and path.is_file() else 0
         total, count = project_size(root)
 
         if total - existing + len(encoded) > limits.max_project_size:
@@ -347,7 +353,7 @@ def write_file(
                 f"writing '{resolved.relative}' would exceed the "
                 f"{limits.max_project_size} byte project limit"
             )
-        if existing == 0 and count + 1 > limits.max_files:
+        if is_new and count + 1 > limits.max_files:
             raise ProjectTooLargeError(f"project already holds {limits.max_files} files")
 
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -418,6 +424,7 @@ def rename_file(workspace_root: Path, source: str, destination: str) -> str:
         # Do not move a secret, a hardlink or a reparse point: the destination
         # name would then hide unsafe content behind a benign path.
         assert_not_secret(resolved_source.relative, resolved_source.absolute)
+        assert_not_secret(resolved_destination.relative, resolved_destination.absolute)
         if resolved_source.absolute.is_file():
             assert_safe_to_write(resolved_source.absolute)
         elif is_reparse_point(resolved_source.absolute):
@@ -462,10 +469,11 @@ def search_files(
         if is_secret_path(relative):
             continue
         try:
+            assert_safe_to_read(path)
             if path.stat().st_size > limits.max_read_size:
                 continue
             text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        except (OSError, UnicodeDecodeError, UnsafeFileError):
             continue
 
         for number, line in enumerate(text.splitlines(), start=1):

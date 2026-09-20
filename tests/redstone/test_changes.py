@@ -10,6 +10,7 @@ from redstone.changes.snapshots import (
 )
 from redstone.domain.models import ChangeKind, EventType
 from redstone.events.bus import EventBus
+from redstone.config import Limits
 from redstone.workspace.files import delete_file, rename_file, write_file
 from redstone.workspace.manager import WorkspaceManager
 
@@ -122,6 +123,29 @@ def test_snapshot_records_real_counts(workspace, store):
     assert snapshot.total_bytes > 0
     assert store.exists(snapshot.id)
     assert snapshot.id in store.list_ids()
+
+
+def test_snapshot_rejects_incoming_bytes_over_quota(tmp_path):
+    ws = WorkspaceManager(tmp_path / "workspaces").create("ws_quota1")
+    write_file(ws.project_root, "data.txt", "xx")
+    store = SnapshotStore(ws.root, ws.project_root, Limits(max_snapshot_storage=1))
+
+    with pytest.raises(SnapshotError, match="storage limit"):
+        store.create("prj_1")
+
+    assert store.list_ids() == ()
+
+
+def test_snapshot_rejects_cumulative_bytes_over_quota(tmp_path):
+    ws = WorkspaceManager(tmp_path / "workspaces").create("ws_quota2")
+    write_file(ws.project_root, "data.txt", "x")
+    store = SnapshotStore(ws.root, ws.project_root, Limits(max_snapshot_storage=1))
+    first = store.create("prj_1")
+
+    with pytest.raises(SnapshotError, match="storage limit"):
+        store.create("prj_1")
+
+    assert store.list_ids() == (first.id,)
 
 
 def test_snapshot_lives_outside_the_agent_reachable_project(workspace, store):

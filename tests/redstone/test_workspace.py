@@ -201,6 +201,20 @@ def test_write_enforces_file_count_limit(project):
         write_file(project, "third.txt", "x", Limits(max_files=2))
 
 
+@pytest.mark.parametrize("directory", ["node_modules", "build", "src/node_modules"])
+def test_ignored_directories_still_count_against_quotas(manager, directory):
+    root = manager.create("ws_quota1").project_root
+    limits = Limits(max_files=1, max_project_size=1)
+    write_file(root, f"{directory}/first.txt", "x", limits)
+
+    with pytest.raises(ProjectTooLargeError):
+        write_file(root, f"{directory}/second.txt", "y", limits)
+    assert project_size(root) == (1, 1)
+
+    with pytest.raises(ProjectTooLargeError):
+        write_file(root, f"{directory}/first.txt", "xx", limits)
+
+
 @pytest.mark.parametrize("path", ["../escape.txt", "/etc/passwd", "C:\\x.txt", "a/../../b"])
 def test_write_cannot_escape(project, path):
     with pytest.raises(PathSecurityError):
@@ -251,6 +265,18 @@ def test_rename_file(project):
 def test_rename_refuses_existing_destination(project):
     with pytest.raises(FileOperationError):
         rename_file(project, "src/App.tsx", "package.json")
+
+
+@pytest.mark.parametrize("destination", [".env", "credentials.json", "nested/.env"])
+def test_rename_refuses_secret_destination(project, destination):
+    source = project / "src" / "App.tsx"
+    original = source.read_text(encoding="utf-8")
+
+    with pytest.raises(FileOperationError, match="secret files"):
+        rename_file(project, "src/App.tsx", destination)
+
+    assert source.read_text(encoding="utf-8") == original
+    assert not (project / destination).exists()
 
 
 @pytest.mark.parametrize(

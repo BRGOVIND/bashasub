@@ -16,7 +16,7 @@ from redstone.changes.snapshots import SnapshotError, SnapshotStore
 from redstone.workspace import files as F
 from redstone.workspace.manager import WorkspaceManager
 from redstone.workspace.paths import PathSecurityError, resolve
-from redstone.workspace.safety import UnsafeFileError
+from redstone.workspace.safety import UnsafeFileError, workspace_lock
 
 _WINDOWS = os.name == "nt"
 
@@ -110,7 +110,7 @@ def test_deleting_a_hardlink_leaves_the_outside_file(env):
 
 
 def test_snapshot_delinks_a_hardlink(env):
-    """A snapshot copies content, so it never preserves a link out of the tree."""
+    """External hardlink content must never enter a snapshot."""
     _, outside, ws = env
     try:
         os.link(outside / "victim.txt", ws.project_root / "hard.txt")
@@ -118,12 +118,20 @@ def test_snapshot_delinks_a_hardlink(env):
         pytest.skip("hardlinks not supported here")
 
     store = SnapshotStore(ws.root, ws.project_root)
-    snap = store.create("prj")
-    copied = store.snapshots_root / snap.id / "hard.txt"
+    with pytest.raises(UnsafeFileError):
+        store.create("prj")
+    assert store.list_ids() == ()
+    assert (outside / "victim.txt").read_text(encoding="utf-8") == "VICTIM"
 
-    # The copy, if made, is independent: editing it must not touch outside.
-    if copied.exists():
-        assert os.stat(copied).st_nlink == 1
+
+def test_search_excludes_external_hardlink(env):
+    _, outside, ws = env
+    try:
+        os.link(outside / "victim.txt", ws.project_root / "hard.txt")
+    except OSError:
+        pytest.skip("hardlinks not supported here")
+
+    assert F.search_files(ws.project_root, "VICTIM") == ()
 
 
 # --------------------------------------------------------- alternate streams
@@ -336,6 +344,31 @@ def test_failed_restore_leaves_the_project_intact(tmp_path, monkeypatch):
     assert ws.project_root.joinpath("src/App.tsx").read_text(encoding="utf-8") == "edited\n"
 
 
+def test_failed_restore_swap_preserves_ignored_tree(tmp_path, monkeypatch):
+    ws = WorkspaceManager(tmp_path / "workspaces").create("ws_swap1")
+    (ws.project_root / "a.txt").write_text("original", encoding="utf-8")
+    modules = ws.project_root / "node_modules" / "pkg"
+    modules.mkdir(parents=True)
+    (modules / "index.js").write_text("keep me", encoding="utf-8")
+    store = SnapshotStore(ws.root, ws.project_root)
+    snap = store.create("prj")
+    (ws.project_root / "a.txt").write_text("edited", encoding="utf-8")
+    original_rename = Path.rename
+
+    def fail_staging_swap(path, target):
+        if path.name.startswith("staging_") and Path(target) == ws.project_root:
+            raise OSError("simulated swap failure")
+        return original_rename(path, target)
+
+    monkeypatch.setattr(Path, "rename", fail_staging_swap)
+
+    with pytest.raises(SnapshotError):
+        store.restore(snap.id)
+
+    assert (ws.project_root / "a.txt").read_text(encoding="utf-8") == "edited"
+    assert (modules / "index.js").read_text(encoding="utf-8") == "keep me"
+
+
 # --------------------------------------------------------- snapshot quota
 
 def test_snapshot_count_quota_is_enforced(tmp_path):
@@ -354,12 +387,47 @@ def test_snapshot_storage_quota_is_enforced(tmp_path):
     (ws.project_root / "a.txt").write_text("x" * 5000, encoding="utf-8")
     store = SnapshotStore(ws.root, ws.project_root, Limits(max_snapshot_storage=1000))
 
-    store.create("prj")  # first is allowed; the check is before-the-fact
     with pytest.raises(SnapshotError):
         store.create("prj")
+    assert store.list_ids() == ()
 
 
 # ------------------------------------------------------------- locking
+
+def test_snapshot_waits_for_project_mutation_critical_section(tmp_path):
+    ws = WorkspaceManager(tmp_path / "workspaces").create("ws_snapshot_lock")
+    entered = threading.Event()
+    release = threading.Event()
+    snapshot_done = threading.Event()
+    results = []
+    store = SnapshotStore(ws.root, ws.project_root)
+
+    def writer():
+        with workspace_lock(ws.project_root):
+            F.write_file(ws.project_root, "state.txt", "partial")
+            entered.set()
+            assert release.wait(5)
+            F.write_file(ws.project_root, "state.txt", "complete")
+
+    def snapper():
+        results.append(store.create("prj"))
+        snapshot_done.set()
+
+    write_thread = threading.Thread(target=writer)
+    snap_thread = threading.Thread(target=snapper)
+    write_thread.start()
+    assert entered.wait(5)
+    snap_thread.start()
+    assert not snapshot_done.wait(0.1)
+    release.set()
+    write_thread.join(5)
+    snap_thread.join(5)
+
+    assert not write_thread.is_alive() and not snap_thread.is_alive()
+    assert snapshot_done.is_set()
+    copied = store.snapshots_root / results[0].id / "state.txt"
+    assert copied.read_text(encoding="utf-8") == "complete"
+
 
 def test_concurrent_writes_respect_the_project_limit(tmp_path):
     ws = WorkspaceManager(tmp_path / "workspaces").create("ws_l1")

@@ -32,7 +32,9 @@ from ..workspace.files import (
     _walk,
 )
 from ..workspace.paths import relative_to_workspace
-from ..workspace.safety import is_reparse_point, workspace_lock
+from ..workspace.safety import (
+    UnsafeFileError, assert_safe_to_read, is_reparse_point, workspace_lock,
+)
 
 __all__ = ["SnapshotError", "FileState", "capture_state", "diff_states",
            "SnapshotStore"]
@@ -65,26 +67,29 @@ def capture_state(project_root: Path, limits: Limits | None = None) -> FileState
     hashes: dict[str, str] = {}
     sizes: dict[str, int] = {}
 
-    for path, _ in _walk(root, limits):
-        try:
-            relative = relative_to_workspace(path, root)
-        except Exception:
-            continue
-        if is_secret_path(relative):
-            continue
-        try:
-            hashes[relative] = file_hash(path)
-            sizes[relative] = path.stat().st_size
-        except OSError:
-            continue
+    with workspace_lock(root):
+        for path, _ in _walk(root, limits):
+            try:
+                relative = relative_to_workspace(path, root)
+            except Exception:
+                continue
+            if is_secret_path(relative):
+                continue
+            try:
+                assert_safe_to_read(path)
+                hashes[relative] = file_hash(path)
+                sizes[relative] = path.stat().st_size
+            except (OSError, UnsafeFileError):
+                continue
 
     return FileState(hashes=hashes, sizes=sizes)
 
 
 def _count_lines(path: Path) -> int:
     try:
+        assert_safe_to_read(path)
         return len(path.read_text(encoding="utf-8").splitlines())
-    except (OSError, UnicodeDecodeError):
+    except (OSError, UnicodeDecodeError, UnsafeFileError):
         return 0
 
 
@@ -180,13 +185,10 @@ class SnapshotStore:
     def create(self, project_id: str, label: str = "") -> Snapshot:
         """Copy the project tree, skipping ignored trees and secret files.
 
-        Quotas are enforced before copying so a project cannot exhaust disk
-        through snapshots. Reparse points are already pruned by the shared walk,
-        so an external junction cannot pull outside content into a snapshot.
-        A hardlinked source is copied by content, which de-links it: the
-        snapshot never preserves a link into another workspace.
+        Quotas are enforced during copying and partial snapshots are removed.
+        Reparse points are pruned by the shared walk; hardlinks are rejected.
         """
-        with workspace_lock(self.workspace_root):
+        with workspace_lock(self.project_root):
             if not self.project_root.is_dir():
                 raise SnapshotError("project directory does not exist")
 
@@ -196,7 +198,8 @@ class SnapshotStore:
                     f"snapshot limit reached "
                     f"({self.limits.max_snapshots_per_workspace} per workspace)"
                 )
-            if self._storage_used() >= self.limits.max_snapshot_storage:
+            storage_used = self._storage_used()
+            if storage_used >= self.limits.max_snapshot_storage:
                 raise SnapshotError("snapshot storage limit reached")
 
             snapshot = Snapshot(id=new_id("snap"), project_id=project_id, label=label)
@@ -210,11 +213,18 @@ class SnapshotStore:
                     relative = relative_to_workspace(source, self.project_root)
                     if is_secret_path(relative):
                         continue
+                    assert_safe_to_read(source)
+                    source_size = source.stat().st_size
+                    if storage_used + total + source_size > self.limits.max_snapshot_storage:
+                        raise SnapshotError("snapshot storage limit reached")
                     target = destination / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source, target)
+                    copied_size = target.stat().st_size
+                    if storage_used + total + copied_size > self.limits.max_snapshot_storage:
+                        raise SnapshotError("snapshot storage limit reached")
                     count += 1
-                    total += source.stat().st_size
+                    total += copied_size
             except Exception:
                 # Never leave a half-written snapshot behind.
                 shutil.rmtree(destination, ignore_errors=True)
@@ -256,7 +266,7 @@ class SnapshotStore:
         recopied: they are derived, large, and re-copying them would make
         rollback unusably slow.
         """
-        with workspace_lock(self.workspace_root):
+        with workspace_lock(self.project_root):
             source = self._path_for(snapshot_id)
             if not source.is_dir():
                 raise SnapshotError("snapshot not found")
@@ -271,6 +281,7 @@ class SnapshotStore:
             restored = 0
             try:
                 for path, _ in _walk(source, self.limits):
+                    assert_safe_to_read(path)
                     relative = relative_to_workspace(path, source)
                     target = staging / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
@@ -280,23 +291,29 @@ class SnapshotStore:
                 shutil.rmtree(staging, ignore_errors=True)
                 raise
 
-            # 2. Carry ignored top-level trees (node_modules) into staging so
-            #    the swap preserves them.
-            if self.project_root.is_dir():
-                for entry in list(self.project_root.iterdir()):
-                    if entry.name in IGNORED_DIRECTORIES and entry.is_dir() \
-                            and not is_reparse_point(entry):
-                        entry.rename(staging / entry.name)
-
-            # 3. Swap. Renames are near-instant and rarely fail.
+            # 2. Carry ignored trees into staging, then swap. If either step
+            #    fails, move those trees back before deleting staging.
+            moved_ignored: list[str] = []
             try:
+                if self.project_root.is_dir():
+                    for entry in list(self.project_root.iterdir()):
+                        if entry.name in IGNORED_DIRECTORIES and entry.is_dir() \
+                                and not is_reparse_point(entry):
+                            entry.rename(staging / entry.name)
+                            moved_ignored.append(entry.name)
+
                 if self.project_root.exists():
                     self.project_root.rename(trash)
                 staging.rename(self.project_root)
             except Exception:
-                # Best-effort recovery of the original tree.
+                # Best-effort recovery of the original tree and ignored data.
                 if trash.exists() and not self.project_root.exists():
                     trash.rename(self.project_root)
+                if self.project_root.is_dir():
+                    for name in moved_ignored:
+                        carried = staging / name
+                        if carried.exists():
+                            carried.rename(self.project_root / name)
                 shutil.rmtree(staging, ignore_errors=True)
                 raise SnapshotError("restore failed during swap; project preserved")
 
