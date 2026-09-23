@@ -1,0 +1,4 @@
+.stage-actions { display: flex; align-items: center; gap: 12px; }
+.status-refresh { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line-dark); background: var(--paper-light); color: var(--ocean); }
+.status-refresh:hover:not(:disabled) { background: var(--yellow); }
+.status-refresh svg { width: 16px; height: 16px; }

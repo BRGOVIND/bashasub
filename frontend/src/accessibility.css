@@ -1,0 +1,5 @@
+:root { --orange-ink: #9b4d31; }
+.workspace-masthead h1 em,
+.panel-kicker span,
+.provider-index,
+.guide-grid article span { color: var(--orange-ink); }

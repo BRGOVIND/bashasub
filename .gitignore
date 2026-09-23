@@ -16,3 +16,5 @@ research/measurement/results/measurements.csv
 
 # redstone runtime data: user projects and snapshots, never committed
 workspaces/
+frontend/node_modules/
+frontend/*.tsbuildinfo
