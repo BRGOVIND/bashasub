@@ -7,12 +7,17 @@ BhashaSub translation page or import Python internals. During local development,
 Vite proxies `/api` to the loopback Redstone API. Deploying it requires an
 authenticated API boundary; the current API has no user authentication.
 
-The shell has three destinations: Workspace (the primary artifact and agent),
-Providers (connection architecture and current availability), and Field guide
-(documentation/discovery entry). Workspace uses a project rail, an engineering
+The shell has Workspace (the primary artifact and agent), Providers,
+Ecosystem (category structure, no fake installs), Help, and Legal routes.
+Unknown paths render a branded 404 with a route home. Workspace uses a project rail, an engineering
 panel, and a preview stage. Below desktop width, these become selectable
 surfaces, with preview first. A command palette indexes navigation and available
 actions; disabled future actions never simulate success.
+
+For production hosting, route `/api` to the Redstone API and rewrite other
+frontend paths to `index.html` so direct `/help`, `/legal`, and unknown-route
+visits reach the client router. The client 404 is visual; the SPA host may
+still return HTTP 200 unless a server-side routing layer is added.
 
 ## Data and component boundaries
 
@@ -49,13 +54,18 @@ unfinished P0 backend work. None is implied by this frontend.
 
 Retro-futurist observatory: warm paper surfaces, dark ocean ink, turquoise
 machinery, signal orange, and measured yellow. Large geometric stage, ruled
-lines, circular instruments, and an original CSS/SVG illustration form one
-coherent world. Typography is temporary and fully tokenized (`--font-display`,
+lines, circular instruments, and original illustration form one coherent
+world. The principal illustration is an original generated raster
+asset, saved under `frontend/public/art/`; the dust-inspired mark and favicon
+are original SVG, not game assets. The source illustration is retained in the
+Codex generated-images folder; the frontend serves a 564 KB JPEG encoding.
+Typography is temporary and fully tokenized (`--font-display`,
 `--font-body`, `--font-mono`; semantic size tokens). Color, spacing, borders,
 and motion are CSS variables. No random gradients or decorative cards.
 
-Motion marks changes of machine state and panel navigation, not ambient
-activity. `prefers-reduced-motion` disables it. Focus rings, semantic buttons,
+One-shot panel/mark entrances and a slow, low-cost ambient panorama give the
+world motion without a JavaScript animation loop. `prefers-reduced-motion`
+disables them. Focus rings, semantic links and buttons,
 labels, live status, and keyboard command access are built in. Navigation
 becomes a compact rail on smaller screens; workspace surfaces are chosen by
 tabs instead of simply stacking three columns.
@@ -69,6 +79,47 @@ Markdown docs share a future discovery taxonomy; no catalog endpoint, install
 operation, pricing, or fake item is implemented yet. Future commands should
 carry capability checks and route to typed API methods, not bespoke component
 fetches.
+
+The agent panel accepts a local `.txt` or `.md` idea file up to 16 KB. Reading
+it fills the editable draft; no upload occurs on file selection. Only pressing
+Send uses the existing agent API. The user should inspect the draft and remove
+secrets before sending. Other media need a future reviewed backend contract.
+
+## Art-direction prompt
+
+> Design Redstone as a development observatory imagined by a 1960s future-city
+> illustrator: hand-made poster texture, glass domes, elevated routes, human
+> scale, sea-blue and turquoise machinery, cream paper, saffron light, coral
+> red energy. Keep preview as the primary artifact and controls useful rather
+> than decorative. Use sentence-case labels, editorial type, asymmetry, sparse
+> geometric linework, and original art. Animate only transform/opacity, with
+> reduced-motion support. Avoid generic AI gradients, glass cards, fake events,
+> copied game marks, and placeholder marketplace listings.
+
+The illustration prompt was: "Original optimistic 1960s imagined future city
+and maker observatory, with a giant glass-domed pavilion, elevated walkways
+and transit, small human explorers, layered architecture, and geometric
+landscaping. Hand-painted mid-century science-fiction magazine illustration;
+visible screenprint grain and imperfect ink registration. Wide panorama with
+quiet sky for responsive crops. Turquoise, sea blue, aqua, warm cream, pale
+saffron, coral red, moss green, restrained dark teal ink. No text, logos,
+watermarks, robots, cyberpunk, or direct copy of the supplied reference."
+The raster is a new composition, not a copy of the supplied reference image.
+
+## Public-launch boundary
+
+This site deliberately has `noindex,nofollow` while authentication, P0 security,
+operator identification, hosting, retention, third-party processing, and
+public service terms remain unresolved. The Legal route is a current-state
+notice, **not** a completed privacy policy or hosted-service agreement.
+GitHub `@BRGOVIND` is the only approved public contact; the git-config email
+is not published. Remove `noindex` and review actual disclosures only when
+the production deployment and legal/operator details are known.
+The [ICO privacy-notice guide](https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/individual-rights/the-right-to-be-informed/what-privacy-information-should-we-provide/)
+is a useful checklist, not a substitute for jurisdiction-specific legal review.
+The logo is deliberately original rather than copying game art; see the
+[Minecraft usage guidelines](https://www.minecraft.net/en-us/usage-guidelines)
+when evaluating any closer game-brand resemblance.
 
 ## Local use
 

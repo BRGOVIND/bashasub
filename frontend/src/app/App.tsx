@@ -2,16 +2,25 @@ import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type { Health, Preview, Project, Runtime, Task, TaskEvent } from '../api/types'
 import { Glyph } from '../components/Glyph'
-import { GuidePage } from '../features/guide/GuidePage'
+import { BrandMark } from '../components/BrandMark'
+import { EcosystemPage } from '../features/ecosystem/EcosystemPage'
+import { HelpPage } from '../features/help/HelpPage'
+import { LegalPage } from '../features/legal/LegalPage'
+import { NotFoundPage } from '../features/not-found/NotFoundPage'
 import { ProviderPage } from '../features/providers/ProviderPage'
 import { Workspace } from '../features/workspace/Workspace'
 import { CommandPalette } from './CommandPalette'
 
-type Page = 'workspace' | 'providers' | 'guide'
+type Page = 'workspace' | 'providers' | 'ecosystem' | 'help' | 'legal' | 'not-found'
+const paths: Record<Exclude<Page, 'not-found'>, string> = {
+  workspace: '/', providers: '/providers', ecosystem: '/ecosystem', help: '/help', legal: '/legal',
+}
+const pageFromPath = (path: string): Page =>
+  (Object.entries(paths).find(([, value]) => value === path)?.[0] as Page | undefined) ?? 'not-found'
 const safeError = (error: unknown) => error instanceof ApiError ? error.message : 'Operation failed. Please retry.'
 
 export function App() {
-  const [page, setPage] = useState<Page>('workspace')
+  const [page, setPage] = useState<Page>(() => pageFromPath(window.location.pathname))
   const [commandOpen, setCommandOpen] = useState(false)
   const [health, setHealth] = useState<Health | null>(null)
   const [connectionError, setConnectionError] = useState<string | null>(null)
@@ -41,6 +50,17 @@ export function App() {
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [])
+
+  useEffect(() => {
+    const onPopState = () => setPage(pageFromPath(window.location.pathname))
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
+  const navigate = (next: Exclude<Page, 'not-found'>) => {
+    window.history.pushState({}, '', paths[next])
+    setPage(next)
+  }
 
   const createProject = async (name: string) => {
     setCreating(true); setCreateError(null)
@@ -80,12 +100,47 @@ export function App() {
   }
 
   const commands = [
-    { id: 'workspace', label: 'Open workspace', group: 'Navigation', run: () => setPage('workspace') },
-    { id: 'providers', label: 'Explore providers', group: 'Navigation', run: () => setPage('providers') },
-    { id: 'guide', label: 'Read field guide', group: 'Navigation', run: () => setPage('guide') },
+    { id: 'workspace', label: 'Open workspace', group: 'Navigation', run: () => navigate('workspace') },
+    { id: 'providers', label: 'Explore providers', group: 'Navigation', run: () => navigate('providers') },
+    { id: 'ecosystem', label: 'Explore skills and plugins', group: 'Navigation', run: () => navigate('ecosystem') },
+    { id: 'help', label: 'Open help', group: 'Navigation', run: () => navigate('help') },
     { id: 'files', label: 'Browse project files', group: 'Coming with file API', run: () => {}, disabled: true },
     { id: 'plugins', label: 'Browse plugins', group: 'Future ecosystem', run: () => {}, disabled: true },
   ]
 
-  return <div className="app-shell"><a className="skip-link" href="#main-content">Skip to content</a><header className="global-header"><button className="brand" onClick={() => setPage('workspace')} aria-label="Redstone home"><span className="brand-symbol"><span/></span><span>REDSTONE<small>DEVELOPMENT ENVIRONMENT</small></span></button><nav className="main-nav" aria-label="Main navigation"><button className={page === 'workspace' ? 'selected' : ''} onClick={() => setPage('workspace')} aria-current={page === 'workspace' ? 'page' : undefined}><Glyph name="grid"/>Workspace</button><button className={page === 'providers' ? 'selected' : ''} onClick={() => setPage('providers')} aria-current={page === 'providers' ? 'page' : undefined}><Glyph name="orbit"/>Providers</button><button className={page === 'guide' ? 'selected' : ''} onClick={() => setPage('guide')} aria-current={page === 'guide' ? 'page' : undefined}><Glyph name="book"/>Field guide</button></nav><div className="header-actions"><button className="search-trigger" aria-label="Open command menu" onClick={() => setCommandOpen(true)}><Glyph name="search"/><span>Command</span><kbd>⌘ K</kbd></button><span className="header-avatar" aria-label="Local session">R</span></div></header><div id="main-content">{page === 'workspace' ? <Workspace health={health} connectionError={connectionError} project={project} projectName={projectName} creating={creating} createError={createError} onCreate={createProject} task={task} events={events} taskBusy={taskBusy} taskError={taskError} onTask={startTask} preview={preview} runtime={runtime} onRefreshStatus={refreshStatus} statusBusy={statusBusy} statusError={statusError}/> : page === 'providers' ? <ProviderPage/> : <GuidePage/>}</div><footer className="global-footer"><span>REDSTONE / FIELD STATION 01</span><span>BUILD WHAT COMES NEXT.</span><span>FOUNDATION · NOT PRODUCTION READY</span></footer><CommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} commands={commands}/></div>
+  const link = (target: Exclude<Page, 'not-found'>, label: string, icon?: 'grid' | 'orbit' | 'book' | 'spark') =>
+    <a href={paths[target]} className={page === target ? 'selected' : ''} aria-current={page === target ? 'page' : undefined}
+      onClick={event => { event.preventDefault(); navigate(target) }}>
+      {icon && <Glyph name={icon}/>}<span>{label}</span>
+    </a>
+
+  return <div className="app-shell">
+    <a className="skip-link" href="#main-content">Skip to content</a>
+    <header className="global-header">
+      <a className="brand" href="/" aria-label="Redstone home" onClick={event => { event.preventDefault(); navigate('workspace') }}>
+        <BrandMark/><span>REDSTONE<small>Development environment</small></span>
+      </a>
+      <nav className="main-nav" aria-label="Main navigation">
+        {link('workspace', 'Workspace', 'grid')}
+        {link('providers', 'Providers', 'orbit')}
+        {link('ecosystem', 'Ecosystem', 'spark')}
+        {link('help', 'Help', 'book')}
+      </nav>
+      <div className="header-actions"><button className="search-trigger" aria-label="Open command menu" onClick={() => setCommandOpen(true)}><Glyph name="search"/><span>Command</span><kbd>⌘ K</kbd></button></div>
+    </header>
+    <div id="main-content">
+      {page === 'workspace' ? <Workspace health={health} connectionError={connectionError} project={project} projectName={projectName} creating={creating} createError={createError} onCreate={createProject} task={task} events={events} taskBusy={taskBusy} taskError={taskError} onTask={startTask} preview={preview} runtime={runtime} onRefreshStatus={refreshStatus} statusBusy={statusBusy} statusError={statusError}/>
+        : page === 'providers' ? <ProviderPage/>
+        : page === 'ecosystem' ? <EcosystemPage/>
+        : page === 'help' ? <HelpPage/>
+        : page === 'legal' ? <LegalPage/>
+        : <NotFoundPage onHome={() => navigate('workspace')}/>}
+    </div>
+    <footer className="global-footer">
+      <span>Redstone · Development preview</span>
+      <span><a href="https://github.com/BRGOVIND" target="_blank" rel="noopener noreferrer">@BRGOVIND</a><a href="https://github.com/BRGOVIND/bashasub" target="_blank" rel="noopener noreferrer">GitHub</a><a href={paths.legal} onClick={event => { event.preventDefault(); navigate('legal') }}>Privacy & legal</a></span>
+      <span>Not production ready</span>
+    </footer>
+    <CommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} commands={commands}/>
+  </div>
 }

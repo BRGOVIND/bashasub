@@ -5,7 +5,7 @@ import { App } from './App'
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 
-beforeEach(() => { vi.stubGlobal('fetch', vi.fn(async () => json({ status: 'ok', runtime: { provider: 'docker', available: true, isolated: true } }))) })
+beforeEach(() => { window.history.replaceState({}, '', '/'); vi.stubGlobal('fetch', vi.fn(async () => json({ status: 'ok', runtime: { provider: 'docker', available: true, isolated: true } }))) })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('Redstone foundation', () => {
@@ -13,7 +13,7 @@ describe('Redstone foundation', () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network') }))
     render(<App />)
     expect(screen.getByRole('heading', { name: /make something remarkable/i })).toBeTruthy()
-    await screen.findByText(/API OFFLINE/)
+    await screen.findByText(/API offline/i)
     expect(screen.queryByText(/preview ready/i)).toBeNull()
   })
 
@@ -58,4 +58,34 @@ describe('Redstone foundation', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Request failed (500)'))
     expect(screen.queryByText(/SECRET/)).toBeNull()
   })
+
+  it('shows ecosystem, legal notice, and a recoverable custom 404 route', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('link', { name: 'Ecosystem' }))
+    expect(window.location.pathname).toBe('/ecosystem')
+    expect(screen.getByRole('heading', { name: 'Skills' })).toBeTruthy()
+    expect(screen.getByText(/Nothing to install yet/)).toBeTruthy()
+    await user.click(screen.getByRole('link', { name: 'Privacy & legal' }))
+    expect(screen.getByRole('heading', { name: 'Privacy note' })).toBeTruthy()
+    window.history.pushState({}, '', '/unmapped-route')
+    window.dispatchEvent(new PopStateEvent('popstate'))
+    expect(await screen.findByRole('heading', { name: /isn't on the map/i })).toBeTruthy()
+    await user.click(screen.getByRole('link', { name: 'Return to workspace' }))
+    expect(window.location.pathname).toBe('/')
+  }, 15000)
+
+  it('reads a text idea into draft locally without submitting it', async () => {
+    const user = userEvent.setup()
+    const fetchMock = vi.fn(async (path: string) => path === '/api/health'
+      ? json({ status: 'ok', runtime: { provider: 'none', available: false, isolated: false } })
+      : json({}, 404))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    const file = new File(['Build a garden planner'], 'idea.md', { type: 'text/markdown' })
+    Object.defineProperty(file, 'text', { value: async () => 'Build a garden planner' })
+    await user.upload(screen.getByLabelText('Add idea file'), file)
+    expect(await screen.findByDisplayValue('Build a garden planner')).toBeTruthy()
+    expect(fetchMock.mock.calls.some(call => String(call[0]).includes('/agent'))).toBe(false)
+  }, 15000)
 })
