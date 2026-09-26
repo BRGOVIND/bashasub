@@ -10,7 +10,7 @@ const questions = [
 export function HelpPage() {
   return <main className="interior-page help-page">
     <div className="eyebrow">Field notes</div>
-    <div className="interior-heading"><div><h1>A little help for the journey.</h1><p>Short answers about what works today and what still needs building.</p></div><Glyph name="book" className="guide-emblem"/></div>
+    <div className="interior-heading"><div><h1>A little help for the journey.</h1><p>Short answers about what works today and what still needs building.</p></div></div>
     <blockquote className="help-quote"><p>“Make the thing. Look at what it became. Then make it better.”</p><cite>Redstone field note</cite></blockquote>
     <div className="section-bar"><span>Common questions</span><span>Foundation edition</span></div>
     <div className="help-questions">{questions.map(([question, answer]) => <article key={question}><h2>{question}</h2><p>{answer}</p></article>)}</div>
