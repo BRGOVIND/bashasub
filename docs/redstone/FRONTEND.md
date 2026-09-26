@@ -9,8 +9,11 @@ authenticated API boundary; the current API has no user authentication.
 
 The shell has Workspace (the primary artifact and agent), Providers,
 Ecosystem (category structure, no fake installs), Help, and Legal routes.
-Unknown paths render a branded 404 with a route home. Workspace uses a project rail, an engineering
-panel, and a preview stage. Below desktop width, these become selectable
+Unknown paths render a branded 404 with a route home. Workspace opens with an
+illustrated introduction and a short, factual project-agent-preview explanation;
+the "Open the workbench" link jumps to the working controls. The workbench keeps
+the preview on the left and the project and agent controls on the right. Below
+desktop width, these become selectable
 surfaces, with preview first. A command palette indexes navigation and available
 actions; disabled future actions never simulate success.
 
@@ -52,18 +55,21 @@ unfinished P0 backend work. None is implied by this frontend.
 
 ## Visual system
 
-Retro-futurist observatory: warm paper surfaces, dark ocean ink, turquoise
-machinery, signal orange, and measured yellow. Large geometric stage, ruled
-lines, circular instruments, and original illustration form one coherent
-world. The principal illustration is an original generated raster
-asset, saved under `frontend/public/art/`; the dust-inspired mark and favicon
-are original SVG, not game assets. The source illustration is retained in the
-Codex generated-images folder; the frontend serves a 564 KB JPEG encoding.
+Retro-futurist observatory: warm mineral surfaces, dark ocean ink, terracotta,
+and measured yellow. Four original generated sculptural studies under
+`frontend/public/art/` show opaque color forms with visible depth and a
+consistent direction of light. A compressed gallery scene anchors the hero,
+a second photograph fills the empty preview, and two transparent sculptural
+cutouts sit directly on the landing and interior surfaces. They are original
+visuals, not reproductions of an artist's work or third-party photographs.
+The dust-inspired mark and favicon remain original SVG, not game assets.
+No external image service is required at runtime.
 Typography is temporary and fully tokenized (`--font-display`,
 `--font-body`, `--font-mono`; semantic size tokens). Color, spacing, borders,
-and motion are CSS variables. No random gradients or decorative cards.
+and motion are CSS variables. Large decorative orbit rings and flat presentation
+graphics were removed so the artwork supports the product UI.
 
-One-shot panel/mark entrances and a slow, low-cost ambient panorama give the
+One-shot panel/mark entrances and a slow, low-cost ambient image drift give the
 world motion without a JavaScript animation loop. `prefers-reduced-motion`
 disables them. Focus rings, semantic links and buttons,
 labels, live status, and keyboard command access are built in. Navigation
@@ -87,24 +93,14 @@ secrets before sending. Other media need a future reviewed backend contract.
 
 ## Art-direction prompt
 
-> Design Redstone as a development observatory imagined by a 1960s future-city
-> illustrator: hand-made poster texture, glass domes, elevated routes, human
-> scale, sea-blue and turquoise machinery, cream paper, saffron light, coral
-> red energy. Keep preview as the primary artifact and controls useful rather
-> than decorative. Use sentence-case labels, editorial type, asymmetry, sparse
-> geometric linework, and original art. Animate only transform/opacity, with
-> reduced-motion support. Avoid generic AI gradients, glass cards, fake events,
-> copied game marks, and placeholder marketplace listings.
-
-The illustration prompt was: "Original optimistic 1960s imagined future city
-and maker observatory, with a giant glass-domed pavilion, elevated walkways
-and transit, small human explorers, layered architecture, and geometric
-landscaping. Hand-painted mid-century science-fiction magazine illustration;
-visible screenprint grain and imperfect ink registration. Wide panorama with
-quiet sky for responsive crops. Turquoise, sea blue, aqua, warm cream, pale
-saffron, coral red, moss green, restrained dark teal ink. No text, logos,
-watermarks, robots, cyberpunk, or direct copy of the supplied reference."
-The raster is a new composition, not a copy of the supplied reference image.
+> Make Redstone feel like a small, useful workshop with a light installation
+> at its entrance. Use original geometric light, architectural shadow, warm
+> paper, deep teal, coral, amber, and aqua. Keep the copy plain and specific:
+> start a project, ask for a change, inspect what runs. Place the introduction
+> before the workbench; make the real controls easy to find. Use sentence-case
+> labels, editorial type, open spacing, and restrained motion with
+> reduced-motion support. Do not copy a specific artist's composition or use
+> stock imagery, generic AI slogans, fake events, or placeholder installs.
 
 ## Public-launch boundary
 
