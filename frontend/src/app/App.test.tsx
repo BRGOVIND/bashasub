@@ -12,7 +12,11 @@ describe('Redstone foundation', () => {
   it('keeps disconnected workspace useful without inventing project data', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network') }))
     render(<App />)
-    expect(screen.getByRole('heading', { name: /make something remarkable/i })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: /start with the messy version/i })).toBeTruthy()
+    expect(screen.getByRole('img', { name: /original installation of solid terracotta/i }).getAttribute('src')).toBe('/art/solid-studio-hero.jpg')
+    expect(screen.getByRole('img', { name: /original sculpture of terracotta/i }).getAttribute('src')).toBe('/art/solid-studio-detail.jpg')
+    expect(screen.getByRole('heading', { name: /from a thought to something you can inspect/i })).toBeTruthy()
+    expect(screen.getByRole('link', { name: /open the workbench/i }).getAttribute('href')).toBe('#workbench')
     await screen.findByText(/API offline/i)
     expect(screen.queryByText(/preview ready/i)).toBeNull()
   })
